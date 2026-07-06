@@ -1,0 +1,33 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ogcr-tokenizer
+  labels:
+    app: ogcr-tokenizer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ogcr-tokenizer
+  template:
+    metadata:
+      labels:
+        app: ogcr-tokenizer
+    spec:
+      containers:
+        - name: ogcr-tokenizer
+          image: ogcr-tokenizer:latest
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: ogcr-tokenizer-config
+            - secretRef:
+                name: ogcr-tokenizer-secret
+          resources:
+            requests:
+
+              memory: "64Mi"
+            limits:
+              cpu: "200m"
+              memory: "128Mi"
+      restartPolicy: Always

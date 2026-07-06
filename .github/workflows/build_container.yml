@@ -1,0 +1,70 @@
+name: Build and publish container
+
+on: [push]
+
+env:
+  DOCKER_HUB_ORGANIZATION: ${{ vars.DOCKER_HUB_ORGANIZATION }}
+  DOCKER_HUB_REPOSITORY: ogcr-tokenizer
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      # Mapped to env so the push/sign steps can gate on its presence.
+      # secrets.* cannot be read in an `if:`; env can. Empty on forks/unconfigured
+      # repos (GitHub withholds secrets from fork PRs) → publish auto-skips.
+      DOCKER_HUB_TOKEN: ${{ secrets.DOCKER_HUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build container image
+        run: |
+          if [ "${{ github.ref }}" == "refs/heads/master" ]; then
+            echo "Release branch build — tagging :latest"
+            docker build . \
+              --tag docker.io/${{ env.DOCKER_HUB_ORGANIZATION }}/${{ env.DOCKER_HUB_REPOSITORY }}:$GITHUB_SHA \
+              --tag docker.io/${{ env.DOCKER_HUB_ORGANIZATION }}/${{ env.DOCKER_HUB_REPOSITORY }}:latest \
+              --tag docker.io/${{ env.DOCKER_HUB_ORGANIZATION }}/${{ env.DOCKER_HUB_REPOSITORY }}:${GITHUB_REF##*/}
+          else
+            echo "Feature branch build — no :latest tag"
+            docker build . \
+              --tag docker.io/${{ env.DOCKER_HUB_ORGANIZATION }}/${{ env.DOCKER_HUB_REPOSITORY }}:$GITHUB_SHA \
+              --tag docker.io/${{ env.DOCKER_HUB_ORGANIZATION }}/${{ env.DOCKER_HUB_REPOSITORY }}:${GITHUB_REF##*/}
+          fi
+
+      - name: Push container image
+        if: env.DOCKER_HUB_TOKEN != ''
+        run: |
+          echo "${{ secrets.DOCKER_HUB_TOKEN }}" | docker login -u "${{ secrets.DOCKER_HUB_USERNAME }}" --password-stdin docker.io
+          docker push docker.io/${{ env.DOCKER_HUB_ORGANIZATION }}/${{ env.DOCKER_HUB_REPOSITORY }} --all-tags
+
+      # Pin cosign-installer to a commit hash (not @main). See references/pattern.md.
+      - uses: sigstore/cosign-installer@4d14d7f17e7112af04ea6108fbb4bfc714c00390  # v3.7.0
+        if: env.DOCKER_HUB_TOKEN != ''
+
+      - name: Write signing key to disk (only needed for `cosign sign --key`)
+        if: env.DOCKER_HUB_TOKEN != ''
+        run: echo "${{ secrets.COSIGN_PRIVATE_KEY }}" > cosign.key
+
+      - name: Sign container image
+        if: env.DOCKER_HUB_TOKEN != ''
+        env:
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+        run: |
+          cosign sign -y --key cosign.key \
+            -a "repo=${{ github.repository }}" \
+            -a "workflow=${{ github.workflow }}" \
+            -a "ref=${{ github.sha }}" \
+            docker.io/${{ env.DOCKER_HUB_ORGANIZATION }}/${{ env.DOCKER_HUB_REPOSITORY }}:${GITHUB_REF##*/}
+          cosign sign -y --key cosign.key \
+            -a "repo=${{ github.repository }}" \
+            -a "workflow=${{ github.workflow }}" \
+            -a "ref=${{ github.sha }}" \
+            docker.io/${{ env.DOCKER_HUB_ORGANIZATION }}/${{ env.DOCKER_HUB_REPOSITORY }}:$GITHUB_SHA
+          if [ "${{ github.ref }}" == "refs/heads/master" ]; then
+            cosign sign -y --key cosign.key \
+              -a "repo=${{ github.repository }}" \
+              -a "workflow=${{ github.workflow }}" \
+              -a "ref=${{ github.sha }}" \
+              docker.io/${{ env.DOCKER_HUB_ORGANIZATION }}/${{ env.DOCKER_HUB_REPOSITORY }}:latest
+          fi

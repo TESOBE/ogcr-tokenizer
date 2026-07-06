@@ -1,0 +1,298 @@
+@startuml OGCR Dynamic Entity Relationships
+
+skinparam linetype ortho
+skinparam entity {
+  BackgroundColor #EEF4FF
+  BorderColor #3355AA
+  FontName Arial
+}
+skinparam note {
+  BackgroundColor #FFFDE7
+  BorderColor #F9A825
+}
+
+' ─────────────────────────────────────────
+' Geographic / ownership
+' ─────────────────────────────────────────
+
+entity "parcel" {
+  * parcel_id : string <<PK>>
+  --
+  multipolygon_coordinates_geometry : object
+  crs : string
+}
+
+entity "land_manager" {
+  * land_manager_id : string <<PK>>
+  --
+  legal_name : string
+  email : string
+  phone : string
+}
+
+' ─────────────────────────────────────────
+' Operators & activities
+' ─────────────────────────────────────────
+
+entity "operator" {
+  * operator_id : string <<PK>>
+  --
+  legal_name : string
+  email : string
+  phone : string
+  address_line_1 : string
+  address_line_2 : string
+  postcode : string
+  country_code : string
+  ogcr_wallet_address : string
+}
+
+entity "activity" {
+  * activity_id : string <<PK>>
+  --
+  # operator_id : string <<FK>>
+  # activity_plan_id : string <<FK>>
+  name : string
+  summary : string
+  description : string
+  type : string
+  city : string
+  country_code : string
+  multipolygon_coordinates : object
+  website : string
+  image : string
+  media_links : string
+  technologies_practices_processes : string
+  start_date : string
+  end_date : string
+  term_commitment : integer
+  cobenefits : string
+  methodologies : string
+  monitoring_period_years : integer
+  monitoring_period_start_date : string
+  monitoring_period_end_date : string
+}
+
+entity "activity_plan" {
+  * activity_plan_id : string <<PK>>
+  --
+  # activity_id : string <<FK>>
+  date_submitted : string
+  activity_eligibility : string
+  legal_parcel_ownership : string
+  crs : string
+  iacs_codes : string
+  lpis_codes : string
+  article_8_1_information : string
+  methodology_quantification_baseline : string
+  methodology_additionality_funding_sources : string
+  methodology_long_term_storage : string
+  methodology_sustainability : string
+  expected_total_carbon_removals : integer
+  expected_total_soil_emissions : integer
+  expected_total_ghg_emissions_associated : integer
+  expected_net_benefit : integer
+  group_advisory_services_description : string
+  group_internal_control_system_description : string
+}
+
+entity "monitoring_plan" {
+  * monitoring_plan_id : string <<PK>>
+  --
+  date_submitted : string
+  monitored_data_parameters : string
+  monitoring_frequency : integer
+  emission_sources_and_sinks : string
+  data_source : string
+  measurement_methods_procedures_accuracy_calibration : string
+  quality_assessment_or_quality_control_procedures : string
+  responsibility_for_collection_and_archiving : string
+}
+
+' ─────────────────────────────────────────
+' Verification entities
+' ─────────────────────────────────────────
+
+entity "parcel_owner_verification" {
+  * parcel_owner_verification_id : string <<PK>>
+  --
+  # parcel_id : string <<FK>>
+  status_code : string
+  status_message : string
+  authority : string
+}
+
+entity "activity_parcel_verification" {
+  * activity_parcel_verification_id : string <<PK>>
+  --
+  # activity_id : string <<FK>>
+  # parcel_id : string <<FK>>
+  status_code : string
+  status_message : string
+  amount : integer
+}
+
+entity "parcel_monitoring_period_verification" {
+  * parcel_monitoring_period_verification_id : string <<PK>>
+  --
+  # activity_id : string <<FK>>
+  # parcel_id : string <<FK>>
+  status_code : string
+  status_message : string
+  amount : integer
+}
+
+entity "activity_verification" {
+  * activity_verification_id : string <<PK>>
+  --
+  # activity_id : string <<FK>>
+  status_code : string
+  status_message : string
+}
+
+entity "activity_monitoring_period_verification" {
+  * activity_monitoring_period_verification_id : string <<PK>>
+  --
+  # activity_id : string <<FK>>
+  status_code : string
+  status_message : string
+}
+
+' ─────────────────────────────────────────
+' Certification entities
+' ─────────────────────────────────────────
+
+entity "certification_scheme" {
+  * certification_scheme_id : string <<PK>>
+  --
+  name : string
+  commission_decision_reference : string
+  certification_methodology : string
+  scheme_version_number : string
+}
+
+entity "certification_body_auditors" {
+  * certification_body_auditors_id : string <<PK>>
+  --
+  certification_body_id : string
+  legal_name : string
+  address_line_1 : string
+  address_line_2 : string
+  address_city : string
+  address_postcode : string
+  country_code : string
+  logo : string
+}
+
+entity "certificate_of_compliance" {
+  * certificate_of_compliance_id : string <<PK>>
+  --
+  # activity_id : string <<FK>>
+  # certification_scheme_id : string <<FK>>
+  # certification_body_id : string <<FK>>
+  issue_date : string
+  expiry_date : string
+  issue_location_country : string
+  certification_status : string
+  certification_scheme_rules_and_procedures : string
+  compliance_audit_report : string
+  certification_annual_reports : string
+  carbon_removals_under_baseline : integer
+  soil_emissions_under_baseline : integer
+  permanent_net_carbon_removal_benefit : integer
+  temporary_net_carbon_removal_benefit : integer (carbon_storage)
+  temporary_net_carbon_removal_benefit : integer (carbon_farming)
+  net_soil_emission_reduction_benefit : integer (carbon_farming)
+}
+
+entity "audit_report" {
+  * audit_report_id : string <<PK>>
+  --
+  # activity_id : string <<FK>>
+  # activity_plan_id : string <<FK>>
+  # monitoring_plan_id : string <<FK>>
+  # certification_scheme_id : string <<FK>>
+  # certification_body_id : string <<FK>>
+  # operator_id : string <<FK>>
+  # compliance_certificate_id : string <<FK>>
+  audit_date : string
+  audit_report_issue_date : string
+  audit_report_issue_location : string
+  audit_duration_onsite : string
+  audit_duration_remote : string
+  audit_itinerary : string
+  audit_method_risk_assessment : string
+  audit_method_sampling_basis : string
+  audit_method_stakeholder_consultation : string
+  sites_audited : string
+  non_conformities_list : string
+  non_conformities_remediation_timeline : string
+  ghg_data_type : string
+  sustainability_co_benefits : string
+  temporary_net_carbon_removal_benefit : integer
+  permanent_net_carbon_removal_benefit : integer
+  net_soil_emission_reduction_benefit : integer
+  accreditation_date : string
+  accreditation_scope : string
+  national_accreditation_body : string
+  certification_scope : string
+  certification_methodology_legal_reference : string
+  date_certified : string
+  certificate_valid_from_date : string
+  certificate_valid_to_date : string
+  recognition_date : string
+  recognition_scope : string
+  national_recognition_authority : string
+  other_certification_schemes_or_standards_certified : string
+  issuing_party_signature_or_stamp : string
+}
+
+' ─────────────────────────────────────────
+' Relationships
+' ─────────────────────────────────────────
+
+' Operator → Activity
+operator                ||--o{ activity                                : "owns >"
+
+' Activity ↔ Activity Plan (bidirectional FKs)
+activity                ||--o{ activity_plan                           : "< planned by"
+
+' Activity → Verification
+activity                ||--o{ activity_verification                   : "verified via >"
+activity                ||--o{ activity_monitoring_period_verification : "monitored via >"
+activity                ||--o{ activity_parcel_verification            : "covers >"
+activity                ||--o{ parcel_monitoring_period_verification   : "monitors >"
+
+' Parcel → Verification
+parcel                  ||--o{ parcel_owner_verification               : "ownership checked >"
+parcel                  ||--o{ activity_parcel_verification            : "verified in >"
+parcel                  ||--o{ parcel_monitoring_period_verification   : "monitored in >"
+
+' Audit & Compliance
+activity                ||--o{ certificate_of_compliance               : "compliance for >"
+activity                ||--o{ audit_report                            : "audited via >"
+activity_plan           ||--o{ audit_report                            : "audited via >"
+monitoring_plan         ||--o{ audit_report                            : "used in >"
+certification_scheme    ||--o{ audit_report                            : "applied in >"
+certification_scheme    ||--o{ certificate_of_compliance               : "governs >"
+operator                ||--o{ audit_report                            : "audited >"
+certificate_of_compliance ||--o{ audit_report                         : "referenced in >"
+
+' Certification body (implicit — no dedicated entity)
+certification_body_auditors }o--o{ audit_report                       : "certification_body_id"
+certification_body_auditors }o--o{ certificate_of_compliance          : "certification_body_id"
+
+note bottom of land_manager
+  No FK found in spec.
+  Likely linked to operator or activity
+  in a future version.
+end note
+
+note right of certification_body_auditors
+  certification_body_id groups auditors
+  under a certification body, but no
+  dedicated certification_body entity
+  exists in this spec version.
+end note
+
+@enduml

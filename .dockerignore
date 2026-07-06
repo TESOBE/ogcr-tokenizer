@@ -1,0 +1,30 @@
+# Version control
+.git
+.gitignore
+
+# Secrets — never bake into image
+.env
+*.env
+
+# Dev / IDE
+.idea
+.vscode
+*.swp
+
+# Go build artifacts
+*.test
+*.out
+
+# Planning files
+task_plan.md
+findings.md
+progress.md
+.planning/
+
+# Docker itself
+Dockerfile
+.dockerignore
+
+# Docs and scripts (not needed at runtime)
+docs/
+scripts/
