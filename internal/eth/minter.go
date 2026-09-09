@@ -34,6 +34,15 @@ type Minter struct {
 	nonce       uint64
 }
 
+// ChainID is the chain the minter is bound to. Exposed for the health report,
+// which names the chain it is minting to.
+func (m *Minter) ChainID() uint64 {
+	if m.chainID == nil {
+		return 0
+	}
+	return m.chainID.Uint64()
+}
+
 func NewMinter(rpcURL, privateKeyHex, parcelAddr, activityAddr, certificateAddr, batchAddr, creditAddr string) (*Minter, error) {
 	client, err := ethclient.Dial(rpcURL)
 	if err != nil {

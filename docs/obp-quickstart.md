@@ -7,6 +7,10 @@ The tokenizer **polls OBP** (default every 30s), and mints on-chain when it sees
 a trigger entity. It never writes to OBP — you (an OBP user with create rights)
 create the entities; the tokenizer reacts.
 
+Because of that rule, nothing on the OBP side reveals whether the tokenizer is
+running: it only ever reads. It reports on itself over HTTP instead, at
+`GET /healthz` on `HEALTH_ADDR` (see [health.md](./health.md)).
+
 - **Exactly once:** every token is deduplicated on-chain, so re-creating or
   re-polling never double-mints.
 - **Auto-defer:** tokens that depend on another token (Certification, Carbon

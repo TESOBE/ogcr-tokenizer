@@ -22,11 +22,18 @@ type Config struct {
 	BatchContractAddress         string
 	CreditContractAddress        string
 	PollInterval                 time.Duration
+
+	// HealthAddr is the listen address for the health endpoint, e.g. ":8081".
+	// Optional: empty disables it, so nothing changes for an existing deployment
+	// that does not set it.
+	HealthAddr string
 }
 
 func Load() (*Config, error) {
 	// Load .env if present; already-set env vars take precedence.
 	_ = godotenv.Load()
+
+	healthAddr := os.Getenv("HEALTH_ADDR")
 
 	interval := 30 * time.Second
 	if s := os.Getenv("POLL_INTERVAL_SECONDS"); s != "" {
@@ -77,5 +84,6 @@ func Load() (*Config, error) {
 		BatchContractAddress:         *required["BATCH_CONTRACT_ADDRESS"],
 		CreditContractAddress:        *required["CREDIT_CONTRACT_ADDRESS"],
 		PollInterval:                 interval,
+		HealthAddr:                   healthAddr,
 	}, nil
 }

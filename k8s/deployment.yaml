@@ -23,6 +23,29 @@ spec:
                 name: ogcr-tokenizer-config
             - secretRef:
                 name: ogcr-tokenizer-secret
+          ports:
+            - name: health
+              containerPort: 8081
+          # Readiness and liveness share the endpoint: a tokenizer that cannot
+          # poll OBP is not doing anything useful, so there is no state where one
+          # should pass and the other fail. It reports unhealthy when a poll has
+          # failed or the loop has stopped ticking, not merely when the process
+          # has died — which is the failure a bare process check misses.
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            # Generous: a restart mid-mint is worse than a slow recovery, and a
+            # degraded tokenizer is usually waiting on OBP rather than wedged.
+            initialDelaySeconds: 30
+            periodSeconds: 60
+            failureThreshold: 5
           resources:
             requests:
 

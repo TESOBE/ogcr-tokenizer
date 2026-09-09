@@ -9,6 +9,7 @@ import (
 
 	"ogcr-tokenizer/config"
 	"ogcr-tokenizer/internal/eth"
+	"ogcr-tokenizer/internal/health"
 	"ogcr-tokenizer/internal/obp"
 	"ogcr-tokenizer/internal/pipeline"
 )
@@ -37,6 +38,12 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	p := pipeline.New(obpClient, minter)
+	// Liveness over HTTP. The tokenizer never writes to OBP, so this is the only
+	// place it can say it is alive; a chain-side backlog answers "is it keeping
+	// up" but reads as healthy when a dead tokenizer simply has no new work.
+	healthState := health.NewState(cfg.PollInterval, minter.ChainID())
+	healthState.Serve(cfg.HealthAddr)
+
+	p := pipeline.New(obpClient, minter).WithHealth(healthState)
 	p.Run(ctx, cfg.PollInterval)
 }

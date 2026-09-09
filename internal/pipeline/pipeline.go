@@ -12,12 +12,17 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 
 	"ogcr-tokenizer/internal/eth"
+	"ogcr-tokenizer/internal/health"
 	"ogcr-tokenizer/internal/obp"
 )
 
 type Pipeline struct {
 	obp    *obp.Client
 	minter *eth.Minter
+
+	// Optional: records what the pipeline is doing for the health endpoint. Nil
+	// when no health server is configured, so every call site guards on it.
+	health *health.State
 
 	// Fast-path in-memory dedup per token type. Authoritative check is on-chain.
 	seenParcels      sync.Map
@@ -28,6 +33,36 @@ type Pipeline struct {
 
 func New(obpClient *obp.Client, minter *eth.Minter) *Pipeline {
 	return &Pipeline{obp: obpClient, minter: minter}
+}
+
+// WithHealth attaches a health state for the pipeline to report into.
+func (p *Pipeline) WithHealth(h *health.State) *Pipeline {
+	p.health = h
+	return p
+}
+
+func (p *Pipeline) recordPoll(name string, found int, err error) {
+	if p.health != nil {
+		p.health.RecordPoll(name, found, err)
+	}
+}
+
+func (p *Pipeline) recordMinted() {
+	if p.health != nil {
+		p.health.Minted()
+	}
+}
+
+func (p *Pipeline) recordFailed() {
+	if p.health != nil {
+		p.health.Failed()
+	}
+}
+
+func (p *Pipeline) recordSkipped() {
+	if p.health != nil {
+		p.health.Skipped()
+	}
 }
 
 func (p *Pipeline) Run(ctx context.Context, interval time.Duration) {
@@ -50,6 +85,7 @@ func (p *Pipeline) Run(ctx context.Context, interval time.Duration) {
 
 func (p *Pipeline) pollParcels(ctx context.Context) {
 	parcels, err := p.obp.GetVerifiedParcels()
+	p.recordPoll("parcels", len(parcels), err)
 	if err != nil {
 		slog.Error("GetVerifiedParcels failed", "err", err)
 		return
@@ -74,6 +110,7 @@ func (p *Pipeline) processParcel(ctx context.Context, parcelID string) {
 		return
 	}
 	if minted {
+		p.recordSkipped()
 		log.Info("ParcelNFT already minted, skipping")
 		return
 	}
@@ -121,11 +158,13 @@ func (p *Pipeline) processParcel(ctx context.Context, parcelID string) {
 		ParcelURI:  parcelURI,
 		ParcelHash: parcelHash,
 	}); err != nil {
+		p.recordFailed()
 		log.Error("mint failed", "err", err)
 		p.seenParcels.Delete(parcelID)
 		return
 	}
 
+	p.recordMinted()
 	log.Info("ParcelNFT minted successfully")
 }
 
@@ -133,6 +172,7 @@ func (p *Pipeline) processParcel(ctx context.Context, parcelID string) {
 
 func (p *Pipeline) pollActivities(ctx context.Context) {
 	avs, err := p.obp.GetVerifiedActivityVerifications()
+	p.recordPoll("activities", len(avs), err)
 	if err != nil {
 		slog.Error("GetVerifiedActivityVerifications failed", "err", err)
 		return
@@ -157,6 +197,7 @@ func (p *Pipeline) processActivity(ctx context.Context, activityID string) {
 		return
 	}
 	if minted {
+		p.recordSkipped()
 		log.Info("ActivityNFT already minted, skipping")
 		return
 	}
@@ -196,11 +237,13 @@ func (p *Pipeline) processActivity(ctx context.Context, activityID string) {
 		ActivityURI:  activityURI,
 		ActivityHash: activityHash,
 	}); err != nil {
+		p.recordFailed()
 		log.Error("mint failed", "err", err)
 		p.seenActivities.Delete(activityID)
 		return
 	}
 
+	p.recordMinted()
 	log.Info("ActivityNFT minted successfully")
 }
 
@@ -208,6 +251,7 @@ func (p *Pipeline) processActivity(ctx context.Context, activityID string) {
 
 func (p *Pipeline) pollCertificates(ctx context.Context) {
 	certs, err := p.obp.GetCertificates()
+	p.recordPoll("certificates", len(certs), err)
 	if err != nil {
 		slog.Error("GetCertificates failed", "err", err)
 		return
@@ -233,6 +277,7 @@ func (p *Pipeline) processCertificate(ctx context.Context, cert obp.Certificate)
 		return
 	}
 	if minted {
+		p.recordSkipped()
 		log.Info("CertificationNFT already minted, skipping")
 		return
 	}
@@ -303,11 +348,13 @@ func (p *Pipeline) processCertificate(ctx context.Context, cert obp.Certificate)
 		CertificationURI:            certificationURI,
 		CertificationHash:           certificationHash,
 	}); err != nil {
+		p.recordFailed()
 		log.Error("mint failed", "err", err)
 		p.seenCertificates.Delete(complianceID)
 		return
 	}
 
+	p.recordMinted()
 	log.Info("CertificationNFT minted successfully")
 }
 
@@ -315,6 +362,7 @@ func (p *Pipeline) processCertificate(ctx context.Context, cert obp.Certificate)
 
 func (p *Pipeline) pollMonitoring(ctx context.Context) {
 	mvs, err := p.obp.GetVerifiedMonitoringVerifications()
+	p.recordPoll("monitoring_periods", len(mvs), err)
 	if err != nil {
 		slog.Error("GetVerifiedMonitoringVerifications failed", "err", err)
 		return
@@ -382,9 +430,11 @@ func (p *Pipeline) processMonitoring(ctx context.Context, mv obp.MonitoringVerif
 			continue
 		}
 		if !found {
+			p.recordMinted()
 			clog.Info("minting CarbonCreditBatchNFT")
 			tokenID, tba, err = p.minter.MintBatch(ctx, refs.batchParams(to, activityTokenID, ca.CreditType))
 			if err != nil {
+				p.recordFailed()
 				clog.Error("batch mint failed", "err", err)
 				failed = true
 				continue
