@@ -132,16 +132,11 @@ func (m *Minter) MintParcel(ctx context.Context, p ParcelParams) error {
 
 // ---- ActivityNFT ----
 
+// ActivityParams is the ActivityNFT mint input: the recipient plus the on-chain
+// ActivityData.
 type ActivityParams struct {
-	To           common.Address
-	ActivityID   string
-	OperatorID   string
-	Name         string
-	ActivityType string
-	StartDate    string
-	EndDate      string
-	ActivityURI  string
-	ActivityHash string
+	To   common.Address
+	Data contract.ActivityNFTActivityData
 }
 
 // ActivityAlreadyMinted reports whether an ActivityNFT exists for this activity_id.
@@ -164,31 +159,22 @@ func (m *Minter) ActivityTokenID(ctx context.Context, activityID string) (*big.I
 }
 
 func (m *Minter) MintActivity(ctx context.Context, p ActivityParams) error {
-	return m.send(ctx, "ActivityNFT activity_id="+p.ActivityID, func(opts *bind.TransactOpts) (*types.Transaction, error) {
-		return m.activity.Mint(opts, p.To, p.ActivityID, p.OperatorID, p.Name,
-			p.ActivityType, p.StartDate, p.EndDate, p.ActivityURI, p.ActivityHash)
+	return m.send(ctx, "ActivityNFT activity_id="+p.Data.ActivityId, func(opts *bind.TransactOpts) (*types.Transaction, error) {
+		return m.activity.Mint(opts, p.To, p.Data)
 	})
 }
 
 // ---- CertificationNFT ----
 
+// CertificationParams is the CertificationNFT mint input: the recipient plus
+// the on-chain CertificationData.
 type CertificationParams struct {
-	To                          common.Address
-	ActivityNftID               *big.Int
-	CertificationSchemeID       string
-	CertificationBodyID         string
-	CertificationOfComplianceID string
-	IssueDate                   string
-	ExpiryDate                  string
-	CertificationStatus         string
-	ActivityURI                 string
-	ActivityHash                string
-	CertificationURI            string
-	CertificationHash           string
+	To   common.Address
+	Data contract.CertificationNFTCertificationData
 }
 
 // CertificationAlreadyMinted reports whether a CertificationNFT exists for this
-// certification_of_compliance_id.
+// certificate_of_compliance_id.
 func (m *Minter) CertificationAlreadyMinted(ctx context.Context, complianceID string) (bool, error) {
 	tokenID, err := m.certificate.TokenIdByComplianceId(&bind.CallOpts{Context: ctx}, complianceID)
 	if err != nil {
@@ -198,75 +184,58 @@ func (m *Minter) CertificationAlreadyMinted(ctx context.Context, complianceID st
 }
 
 func (m *Minter) MintCertification(ctx context.Context, p CertificationParams) error {
-	return m.send(ctx, "CertificationNFT compliance_id="+p.CertificationOfComplianceID, func(opts *bind.TransactOpts) (*types.Transaction, error) {
-		return m.certificate.Mint(opts, p.To, p.ActivityNftID,
-			p.CertificationSchemeID, p.CertificationBodyID, p.CertificationOfComplianceID,
-			p.IssueDate, p.ExpiryDate, p.CertificationStatus,
-			p.ActivityURI, p.ActivityHash, p.CertificationURI, p.CertificationHash)
+	return m.send(ctx, "CertificationNFT compliance_id="+p.Data.CertificateOfComplianceId, func(opts *bind.TransactOpts) (*types.Transaction, error) {
+		return m.certificate.Mint(opts, p.To, p.Data)
 	})
 }
 
 // ---- CarbonCreditBatchNFT (ERC-6551) + CarbonCredit (ERC-20) ----
 
+// BatchParams is the CarbonCreditBatchNFT mint input: the recipient plus the
+// on-chain BatchData.
 type BatchParams struct {
-	To                      common.Address
-	ActivityNftID           *big.Int
-	CreditType              string
-	ActivityURI             string
-	ActivityHash            string
-	OperatorURI             string
-	OperatorHash            string
-	CertificationURI        string
-	CertificationHash       string
-	CertificationSchemeURI  string
-	CertificationSchemeHash string
-	CertificationBodyURI    string
-	CertificationBodyHash   string
+	To   common.Address
+	Data contract.CarbonCreditBatchNFTBatchData
 }
 
-// FindBatch returns the token id and TBA of an existing batch for
-// (activity_nft_id, credit_type), or found=false. The batch contract has no
-// business-key mapping, so we scan minted batches — restart-safe and authoritative.
-func (m *Minter) FindBatch(ctx context.Context, activityNftID *big.Int, creditType string) (tokenID *big.Int, tba common.Address, found bool, err error) {
-	nextID, err := m.batch.NextId(&bind.CallOpts{Context: ctx})
+// FindBatch returns the token id, token-bound account and issued amount of the
+// batch minted for a carbon_credit_batch_id, or found=false.
+func (m *Minter) FindBatch(ctx context.Context, batchID string) (tokenID *big.Int, tba common.Address, amount *big.Int, found bool, err error) {
+	opts := &bind.CallOpts{Context: ctx}
+	tokenID, err = m.batch.TokenIdByBatchId(opts, batchID)
 	if err != nil {
-		return nil, common.Address{}, false, fmt.Errorf("batch nextId: %w", err)
+		return nil, common.Address{}, nil, false, fmt.Errorf("tokenIdByBatchId(%s): %w", batchID, err)
 	}
-	for i := int64(1); i < nextID.Int64(); i++ {
-		id := big.NewInt(i)
-		b, err := m.batch.GetBatch(&bind.CallOpts{Context: ctx}, id)
-		if err != nil {
-			return nil, common.Address{}, false, fmt.Errorf("getBatch(%d): %w", i, err)
-		}
-		if b.ActivityNftId.Cmp(activityNftID) == 0 && b.CreditType == creditType {
-			tba, err := m.batch.GetTBA(&bind.CallOpts{Context: ctx}, id)
-			if err != nil {
-				return nil, common.Address{}, false, fmt.Errorf("getTBA(%d): %w", i, err)
-			}
-			return id, tba, true, nil
-		}
+	if tokenID.Sign() == 0 {
+		return nil, common.Address{}, nil, false, nil
 	}
-	return nil, common.Address{}, false, nil
+	b, err := m.batch.GetBatch(opts, tokenID)
+	if err != nil {
+		return nil, common.Address{}, nil, false, fmt.Errorf("getBatch(%s): %w", tokenID, err)
+	}
+	tba, err = m.batch.GetTBA(opts, tokenID)
+	if err != nil {
+		return nil, common.Address{}, nil, false, fmt.Errorf("getTBA(%s): %w", tokenID, err)
+	}
+	return tokenID, tba, b.Amount, true, nil
 }
 
-// CreditBalance returns the CarbonCredit ERC-20 balance of an address (a batch TBA).
-func (m *Minter) CreditBalance(ctx context.Context, addr common.Address) (*big.Int, error) {
-	bal, err := m.credit.BalanceOf(&bind.CallOpts{Context: ctx}, addr)
+// CreditMintedTo returns the cumulative CarbonCredit amount ever minted to an
+// address (a batch TBA). Unlike the balance it does not drop when credits are
+// moved out or retired, so it is safe to compare against the batch amount.
+func (m *Minter) CreditMintedTo(ctx context.Context, addr common.Address) (*big.Int, error) {
+	minted, err := m.credit.MintedTo(&bind.CallOpts{Context: ctx}, addr)
 	if err != nil {
-		return nil, fmt.Errorf("credit balanceOf(%s): %w", addr.Hex(), err)
+		return nil, fmt.Errorf("credit mintedTo(%s): %w", addr.Hex(), err)
 	}
-	return bal, nil
+	return minted, nil
 }
 
 // MintBatch mints a CarbonCreditBatchNFT and returns the created token-bound
 // account (TBA) parsed from the BatchMinted event.
 func (m *Minter) MintBatch(ctx context.Context, p BatchParams) (tokenID *big.Int, tba common.Address, err error) {
-	receipt, err := m.sendTx(ctx, "CarbonCreditBatchNFT credit_type="+p.CreditType, func(opts *bind.TransactOpts) (*types.Transaction, error) {
-		return m.batch.Mint(opts, p.To, p.ActivityNftID, p.CreditType,
-			p.ActivityURI, p.ActivityHash, p.OperatorURI, p.OperatorHash,
-			p.CertificationURI, p.CertificationHash,
-			p.CertificationSchemeURI, p.CertificationSchemeHash,
-			p.CertificationBodyURI, p.CertificationBodyHash)
+	receipt, err := m.sendTx(ctx, "CarbonCreditBatchNFT batch_id="+p.Data.CarbonCreditBatchId, func(opts *bind.TransactOpts) (*types.Transaction, error) {
+		return m.batch.Mint(opts, p.To, p.Data)
 	})
 	if err != nil {
 		return nil, common.Address{}, err

@@ -11,6 +11,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 
+	"ogcr-tokenizer/internal/contract"
 	"ogcr-tokenizer/internal/eth"
 	"ogcr-tokenizer/internal/health"
 	"ogcr-tokenizer/internal/obp"
@@ -81,6 +82,97 @@ func (p *Pipeline) Run(ctx context.Context, interval time.Duration) {
 	}
 }
 
+// ---- shared lookups ----
+
+// hashOf is the on-chain integrity hash of a registry record: keccak256 of the
+// exact response body it was read from.
+func hashOf(body []byte) string { return crypto.Keccak256Hash(body).Hex() }
+
+// recipient returns the operator's wallet, the address every token of an
+// activity is minted to. It refuses anything that is not a real address rather
+// than minting to whatever a malformed value happens to decode to.
+func recipient(operator *obp.Operator) (common.Address, error) {
+	addr := operator.OGCRWalletAddress
+	if !common.IsHexAddress(addr) || common.HexToAddress(addr) == (common.Address{}) {
+		return common.Address{}, fmt.Errorf("operator %s has no valid ogcr_wallet_address", operator.OperatorID)
+	}
+	return common.HexToAddress(addr), nil
+}
+
+// activityRefs is an activity with its operator and their url/hash references.
+type activityRefs struct {
+	activity                  *obp.Activity
+	activityURL, activityHash string
+	operator                  *obp.Operator
+	operatorURL, operatorHash string
+}
+
+func (p *Pipeline) gatherActivityRefs(activityID string) (activityRefs, error) {
+	var r activityRefs
+
+	activity, activityBody, err := p.obp.GetActivityWithRaw(activityID)
+	if err != nil {
+		return r, fmt.Errorf("activity: %w", err)
+	}
+	r.activity = activity
+	r.activityURL = p.obp.ActivityURL(activityID)
+	r.activityHash = hashOf(activityBody)
+
+	operator, operatorBody, err := p.obp.GetOperatorWithRaw(activity.OperatorID)
+	if err != nil {
+		return r, fmt.Errorf("operator %s: %w", activity.OperatorID, err)
+	}
+	r.operator = operator
+	r.operatorURL = p.obp.OperatorURL(activity.OperatorID)
+	r.operatorHash = hashOf(operatorBody)
+
+	return r, nil
+}
+
+// certificateRefs is a certificate of compliance with its scheme and body and
+// their url/hash references. Scheme and body stay empty when the certificate
+// does not name one.
+type certificateRefs struct {
+	cert                              *obp.Certificate
+	certURL, certHash                 string
+	schemeName, schemeURL, schemeHash string
+	bodyName, bodyURL, bodyHash       string
+}
+
+func (p *Pipeline) gatherCertificateRefs(certificateID string) (certificateRefs, error) {
+	var r certificateRefs
+
+	cert, certBody, err := p.obp.GetCertificateWithRaw(certificateID)
+	if err != nil {
+		return r, fmt.Errorf("certificate: %w", err)
+	}
+	r.cert = cert
+	r.certURL = p.obp.CertificateURL(certificateID)
+	r.certHash = hashOf(certBody)
+
+	if id := cert.CertificationSchemeID; id != "" {
+		scheme, schemeBody, err := p.obp.GetCertificationSchemeWithRaw(id)
+		if err != nil {
+			return r, fmt.Errorf("certification_scheme %s: %w", id, err)
+		}
+		r.schemeName = scheme.Name
+		r.schemeURL = p.obp.CertificationSchemeURL(id)
+		r.schemeHash = hashOf(schemeBody)
+	}
+
+	if id := cert.CertificationBodyID; id != "" {
+		body, bodyBody, err := p.obp.GetCertificationBodyWithRaw(id)
+		if err != nil {
+			return r, fmt.Errorf("certification_body %s: %w", id, err)
+		}
+		r.bodyName = body.LegalName
+		r.bodyURL = p.obp.CertificationBodyURL(id)
+		r.bodyHash = hashOf(bodyBody)
+	}
+
+	return r, nil
+}
+
 // ---- ParcelNFT ----
 
 func (p *Pipeline) pollParcels(ctx context.Context) {
@@ -123,18 +215,18 @@ func (p *Pipeline) processParcel(ctx context.Context, parcelID string) {
 		return
 	}
 	parcelURI := p.obp.ParcelURL(parcelID)
-	parcelHash := crypto.Keccak256Hash(parcelBody).Hex()
+	parcelHash := hashOf(parcelBody)
 
-	// activity_parcel_verification → activity → operator (for recipient wallet)
-	apv, err := p.obp.GetActivityParcelVerificationByParcelID(parcelID)
+	// parcel_activity → activity → operator (for recipient wallet)
+	link, err := p.obp.GetParcelActivityByParcelID(parcelID)
 	if err != nil {
-		log.Error("GetActivityParcelVerification failed", "err", err)
+		log.Error("GetParcelActivity failed", "err", err)
 		p.seenParcels.Delete(parcelID)
 		return
 	}
-	activity, err := p.obp.GetActivity(apv.ActivityID)
+	activity, err := p.obp.GetActivity(link.ActivityID)
 	if err != nil {
-		log.Error("GetActivity failed", "activity_id", apv.ActivityID, "err", err)
+		log.Error("GetActivity failed", "activity_id", link.ActivityID, "err", err)
 		p.seenParcels.Delete(parcelID)
 		return
 	}
@@ -144,16 +236,17 @@ func (p *Pipeline) processParcel(ctx context.Context, parcelID string) {
 		p.seenParcels.Delete(parcelID)
 		return
 	}
-	if operator.OGCRWalletAddress == "" {
-		log.Error("operator has no ogcr_wallet_address")
+	to, err := recipient(operator)
+	if err != nil {
+		log.Error("no recipient", "err", err)
 		p.seenParcels.Delete(parcelID)
 		return
 	}
 
-	log.Info("minting ParcelNFT", "to", operator.OGCRWalletAddress, "parcel_uri", parcelURI, "parcel_hash", parcelHash)
+	log.Info("minting ParcelNFT", "to", to.Hex(), "parcel_uri", parcelURI, "parcel_hash", parcelHash)
 
 	if err := p.minter.MintParcel(ctx, eth.ParcelParams{
-		To:         common.HexToAddress(operator.OGCRWalletAddress),
+		To:         to,
 		ParcelID:   parcelID,
 		ParcelURI:  parcelURI,
 		ParcelHash: parcelHash,
@@ -170,20 +263,41 @@ func (p *Pipeline) processParcel(ctx context.Context, parcelID string) {
 
 // ---- ActivityNFT ----
 
+// pollActivities finds activities that are ready to mint: a verified
+// activity_verification AND at least one certificate_of_compliance.
 func (p *Pipeline) pollActivities(ctx context.Context) {
 	avs, err := p.obp.GetVerifiedActivityVerifications()
-	p.recordPoll("activities", len(avs), err)
 	if err != nil {
+		p.recordPoll("activities", 0, err)
 		slog.Error("GetVerifiedActivityVerifications failed", "err", err)
 		return
 	}
-	slog.Info("activity poll complete", "verified_activities", len(avs))
+	certs, err := p.obp.GetCertificates()
+	if err != nil {
+		p.recordPoll("activities", 0, err)
+		slog.Error("GetCertificates failed", "err", err)
+		return
+	}
+	certified := map[string]bool{}
+	for _, cert := range certs {
+		certified[cert.ActivityID] = true
+	}
 
+	// An activity can carry several verified verifications; mint it once.
+	ready := map[string]bool{}
 	for _, av := range avs {
-		if _, loaded := p.seenActivities.LoadOrStore(av.ActivityID, struct{}{}); loaded {
+		if av.ActivityID != "" && certified[av.ActivityID] {
+			ready[av.ActivityID] = true
+		}
+	}
+	p.recordPoll("activities", len(ready), nil)
+	slog.Info("activity poll complete", "verified_activities", len(avs), "verified_and_certified", len(ready))
+
+	for activityID := range ready {
+		if _, loaded := p.seenActivities.LoadOrStore(activityID, struct{}{}); loaded {
 			continue
 		}
-		go p.processActivity(ctx, av.ActivityID)
+		go p.processActivity(ctx, activityID)
 	}
 }
 
@@ -202,40 +316,50 @@ func (p *Pipeline) processActivity(ctx context.Context, activityID string) {
 		return
 	}
 
-	// Raw activity entity → decoded fields + activity_uri + integrity hash
-	activity, body, err := p.obp.GetActivityWithRaw(activityID)
+	refs, err := p.gatherActivityRefs(activityID)
 	if err != nil {
-		log.Error("GetActivityWithRaw failed", "err", err)
+		log.Error("gathering activity references failed", "err", err)
 		p.seenActivities.Delete(activityID)
 		return
 	}
-	activityURI := p.obp.ActivityURL(activityID)
-	activityHash := crypto.Keccak256Hash(body).Hex()
-
-	operator, err := p.obp.GetOperator(activity.OperatorID)
+	to, err := recipient(refs.operator)
 	if err != nil {
-		log.Error("GetOperator failed", "operator_id", activity.OperatorID, "err", err)
-		p.seenActivities.Delete(activityID)
-		return
-	}
-	if operator.OGCRWalletAddress == "" {
-		log.Error("operator has no ogcr_wallet_address")
+		log.Error("no recipient", "err", err)
 		p.seenActivities.Delete(activityID)
 		return
 	}
 
-	log.Info("minting ActivityNFT", "to", operator.OGCRWalletAddress, "activity_uri", activityURI, "activity_hash", activityHash)
+	parcelIDs, err := p.obp.GetParcelIDsByActivityID(activityID)
+	if err != nil {
+		log.Error("GetParcelIDsByActivityID failed", "err", err)
+		p.seenActivities.Delete(activityID)
+		return
+	}
+
+	activity := refs.activity
+	log.Info("minting ActivityNFT", "to", to.Hex(), "activity_url", refs.activityURL,
+		"activity_hash", refs.activityHash, "parcels", len(parcelIDs))
 
 	if err := p.minter.MintActivity(ctx, eth.ActivityParams{
-		To:           common.HexToAddress(operator.OGCRWalletAddress),
-		ActivityID:   activityID,
-		OperatorID:   activity.OperatorID,
-		Name:         activity.Name,
-		ActivityType: activity.Type,
-		StartDate:    activity.StartDate,
-		EndDate:      activity.EndDate,
-		ActivityURI:  activityURI,
-		ActivityHash: activityHash,
+		To: to,
+		Data: contract.ActivityNFTActivityData{
+			ActivityId:            activityID,
+			OperatorId:            activity.OperatorID,
+			OperatorName:          refs.operator.LegalName,
+			Name:                  activity.Name,
+			Summary:               activity.Summary,
+			Website:               activity.Website,
+			ActivityType:          activity.ActivityType,
+			UnitTypes:             activity.UnitTypes,
+			City:                  activity.City,
+			CountryId:             activity.CountryID,
+			CertificationSchemeId: activity.CertificationSchemeID,
+			ParcelIds:             parcelIDs,
+			StartDate:             activity.StartDate,
+			EndDate:               activity.EndDate,
+			ActivityUrl:           refs.activityURL,
+			ActivityHash:          refs.activityHash,
+		},
 	}); err != nil {
 		p.recordFailed()
 		log.Error("mint failed", "err", err)
@@ -249,6 +373,9 @@ func (p *Pipeline) processActivity(ctx context.Context, activityID string) {
 
 // ---- CertificationNFT ----
 
+// pollCertificates mints one CertificationNFT per certificate_of_compliance. A
+// re-certification is a new certificate record for the same activity, so it
+// arrives here as just another certificate.
 func (p *Pipeline) pollCertificates(ctx context.Context) {
 	certs, err := p.obp.GetCertificates()
 	p.recordPoll("certificates", len(certs), err)
@@ -262,13 +389,12 @@ func (p *Pipeline) pollCertificates(ctx context.Context) {
 		if _, loaded := p.seenCertificates.LoadOrStore(cert.CertificateOfComplianceID, struct{}{}); loaded {
 			continue
 		}
-		go p.processCertificate(ctx, cert)
+		go p.processCertificate(ctx, cert.CertificateOfComplianceID, cert.ActivityID)
 	}
 }
 
-func (p *Pipeline) processCertificate(ctx context.Context, cert obp.Certificate) {
-	complianceID := cert.CertificateOfComplianceID
-	log := slog.With("certificate_of_compliance_id", complianceID, "activity_id", cert.ActivityID)
+func (p *Pipeline) processCertificate(ctx context.Context, complianceID, activityID string) {
+	log := slog.With("certificate_of_compliance_id", complianceID, "activity_id", activityID)
 
 	minted, err := p.minter.CertificationAlreadyMinted(ctx, complianceID)
 	if err != nil {
@@ -284,7 +410,7 @@ func (p *Pipeline) processCertificate(ctx context.Context, cert obp.Certificate)
 
 	// The certificate references an activity; the CertificationNFT stores that
 	// ActivityNFT's token id. Defer until the ActivityNFT has been minted.
-	activityTokenID, err := p.minter.ActivityTokenID(ctx, cert.ActivityID)
+	activityTokenID, err := p.minter.ActivityTokenID(ctx, activityID)
 	if err != nil {
 		log.Error("ActivityTokenID lookup failed", "err", err)
 		p.seenCertificates.Delete(complianceID)
@@ -296,57 +422,78 @@ func (p *Pipeline) processCertificate(ctx context.Context, cert obp.Certificate)
 		return
 	}
 
-	// Linked activity → activity_url + hash (for the cert) and operator wallet (recipient).
-	activity, activityBody, err := p.obp.GetActivityWithRaw(cert.ActivityID)
+	aRefs, err := p.gatherActivityRefs(activityID)
 	if err != nil {
-		log.Error("GetActivityWithRaw failed", "err", err)
+		log.Error("gathering activity references failed", "err", err)
 		p.seenCertificates.Delete(complianceID)
 		return
 	}
-	activityURI := p.obp.ActivityURL(cert.ActivityID)
-	activityHash := crypto.Keccak256Hash(activityBody).Hex()
-
-	operator, err := p.obp.GetOperator(activity.OperatorID)
+	to, err := recipient(aRefs.operator)
 	if err != nil {
-		log.Error("GetOperator failed", "operator_id", activity.OperatorID, "err", err)
-		p.seenCertificates.Delete(complianceID)
-		return
-	}
-	if operator.OGCRWalletAddress == "" {
-		log.Error("operator has no ogcr_wallet_address")
+		log.Error("no recipient", "err", err)
 		p.seenCertificates.Delete(complianceID)
 		return
 	}
 
-	// Certificate entity → certification_url + hash.
-	certBody, err := p.obp.GetCertificateRaw(complianceID)
+	cRefs, err := p.gatherCertificateRefs(complianceID)
 	if err != nil {
-		log.Error("GetCertificateRaw failed", "err", err)
+		log.Error("gathering certificate references failed", "err", err)
 		p.seenCertificates.Delete(complianceID)
 		return
 	}
-	certificationURI := p.obp.CertificateURL(complianceID)
-	certificationHash := crypto.Keccak256Hash(certBody).Hex()
+	cert := cRefs.cert
+
+	// Audit report → audit_report_uri + hash, when the certificate names one.
+	var auditURI, auditHash string
+	if cert.AuditReportID != "" {
+		auditBody, err := p.obp.GetAuditReportRaw(cert.AuditReportID)
+		if err != nil {
+			log.Error("GetAuditReportRaw failed", "audit_report_id", cert.AuditReportID, "err", err)
+			p.seenCertificates.Delete(complianceID)
+			return
+		}
+		auditURI = p.obp.AuditReportURL(cert.AuditReportID)
+		auditHash = hashOf(auditBody)
+	}
 
 	log.Info("minting CertificationNFT",
-		"to", operator.OGCRWalletAddress,
+		"to", to.Hex(),
 		"activity_nft_id", activityTokenID.String(),
-		"certification_url", certificationURI,
+		"certificate_of_compliance_uri", cRefs.certURL,
 	)
 
 	if err := p.minter.MintCertification(ctx, eth.CertificationParams{
-		To:                          common.HexToAddress(operator.OGCRWalletAddress),
-		ActivityNftID:               activityTokenID,
-		CertificationSchemeID:       cert.CertificationSchemeID,
-		CertificationBodyID:         cert.CertificationBodyID,
-		CertificationOfComplianceID: complianceID,
-		IssueDate:                   cert.IssueDate,
-		ExpiryDate:                  cert.ExpiryDate,
-		CertificationStatus:         cert.CertificationStatus,
-		ActivityURI:                 activityURI,
-		ActivityHash:                activityHash,
-		CertificationURI:            certificationURI,
-		CertificationHash:           certificationHash,
+		To: to,
+		Data: contract.CertificationNFTCertificationData{
+			CertificateOfComplianceId:   complianceID,
+			CertificateOfComplianceUri:  cRefs.certURL,
+			CertificateOfComplianceHash: cRefs.certHash,
+			ActivityId:                  activityID,
+			ActivityNftId:               activityTokenID,
+			ActivityUri:                 aRefs.activityURL,
+			ActivityHash:                aRefs.activityHash,
+			ActivityName:                aRefs.activity.Name,
+			CertificationSchemeName:     cRefs.schemeName,
+			CertificationSchemeUri:      cRefs.schemeURL,
+			CertificationSchemeHash:     cRefs.schemeHash,
+			CertificationBodyName:       cRefs.bodyName,
+			CertificationBodyUri:        cRefs.bodyURL,
+			CertificationBodyHash:       cRefs.bodyHash,
+			CountryId:                   cert.CountryID,
+			IssueDate:                   cert.IssueDate,
+			ExpiryDate:                  cert.ExpiryDate,
+			AuditReportUri:              auditURI,
+			AuditReportHash:             auditHash,
+			// Quantities go on-chain exactly as recorded; an absent one stays empty.
+			CarbonRemovalsUnderBaseline:                   cert.CarbonRemovalsUnderBaseline.String(),
+			SoilEmissionsUnderBaseline:                    cert.SoilEmissionsUnderBaseline.String(),
+			PermanentNetCarbonRemovalBenefit:              cert.PermanentNetCarbonRemovalBenefit.String(),
+			CarbonFarmingTemporaryNetCarbonRemovalBenefit: cert.CarbonFarmingTemporaryNetCarbonRemovalBenefit.String(),
+			CarbonFarmingNetSoilEmissionReductionBenefit:  cert.CarbonFarmingNetSoilEmissionReductionBenefit.String(),
+			CarbonStorageTemporaryNetCarbonRemovalBenefit: cert.CarbonStorageTemporaryNetCarbonRemovalBenefit.String(),
+			UnitTypes:           cert.UnitTypes,
+			CertificationStatus: cert.CertificationStatus,
+		},
 	}); err != nil {
 		p.recordFailed()
 		log.Error("mint failed", "err", err)
@@ -377,15 +524,23 @@ func (p *Pipeline) pollMonitoring(ctx context.Context) {
 	}
 }
 
-// processMonitoring mints one CarbonCreditBatchNFT per positive benefit amount on
-// the verification, then mints that amount of CarbonCredit ERC-20 into the batch's TBA.
+// processMonitoring mints one CarbonCreditBatchNFT per benefit field that
+// carries a value on the verification, then mints that amount of CarbonCredit
+// ERC-20 into the batch's TBA.
 func (p *Pipeline) processMonitoring(ctx context.Context, mv obp.MonitoringVerification) {
 	vID := mv.ActivityMonitoringPeriodVerificationID
 	log := slog.With("monitoring_verification_id", vID, "activity_id", mv.ActivityID)
 
-	amounts := mv.CreditAmounts()
-	if len(amounts) == 0 {
-		log.Info("no positive benefit amounts, skipping")
+	batches, err := mv.CreditBatches()
+	if err != nil {
+		// A malformed amount will not fix itself on retry within this run; it
+		// is picked up again after a restart once the record is corrected.
+		p.recordFailed()
+		log.Error("invalid benefit amount, not minting any batch for this verification", "err", err)
+		return
+	}
+	if len(batches) == 0 {
+		log.Info("no benefit amounts, skipping")
 		return
 	}
 
@@ -402,61 +557,70 @@ func (p *Pipeline) processMonitoring(ctx context.Context, mv obp.MonitoringVerif
 		return
 	}
 
-	// Assemble the shared url/hash reference set (activity, operator, certificate,
-	// scheme, body). Any fetch failure defers the whole verification for retry.
-	refs, operator, err := p.gatherBatchRefs(ctx, mv.ActivityID)
+	// Assemble the reference set shared by every batch of this verification
+	// (they differ only by unit type + amount). Any fetch failure defers the
+	// whole verification for retry.
+	aRefs, cRefs, err := p.gatherBatchRefs(mv)
 	if err != nil {
 		log.Error("gathering batch references failed", "err", err)
 		p.seenMonitoring.Delete(vID)
 		return
 	}
-	if operator.OGCRWalletAddress == "" {
-		log.Error("operator has no ogcr_wallet_address")
+	to, err := recipient(aRefs.operator)
+	if err != nil {
+		log.Error("no recipient", "err", err)
 		p.seenMonitoring.Delete(vID)
 		return
 	}
-	to := common.HexToAddress(operator.OGCRWalletAddress)
 
 	failed := false
-	for _, ca := range amounts {
-		clog := log.With("credit_type", ca.CreditType, "amount", ca.Amount)
-		amount := big.NewInt(ca.Amount)
+	for _, b := range batches {
+		clog := log.With("carbon_credit_batch_id", b.BatchID, "unit_type", b.UnitType, "amount", b.Amount.String())
 
 		// Mint the batch if it doesn't exist yet.
-		tokenID, tba, found, err := p.minter.FindBatch(ctx, activityTokenID, ca.CreditType)
+		tokenID, tba, issued, found, err := p.minter.FindBatch(ctx, b.BatchID)
 		if err != nil {
 			clog.Error("FindBatch failed", "err", err)
 			failed = true
 			continue
 		}
 		if !found {
-			p.recordMinted()
+			issued, err = obp.ToBaseUnits(b.Amount, 18)
+			if err != nil {
+				clog.Error("invalid amount", "err", err)
+				failed = true
+				continue
+			}
 			clog.Info("minting CarbonCreditBatchNFT")
-			tokenID, tba, err = p.minter.MintBatch(ctx, refs.batchParams(to, activityTokenID, ca.CreditType))
+			tokenID, tba, err = p.minter.MintBatch(ctx, batchParams(to, activityTokenID, b, issued, aRefs, cRefs))
 			if err != nil {
 				p.recordFailed()
 				clog.Error("batch mint failed", "err", err)
 				failed = true
 				continue
 			}
+			p.recordMinted()
 		}
 
-		// Ensure the batch's TBA holds exactly `amount` credits. Batch and credit
-		// are two txs; minting the shortfall (not a flat amount) recovers a batch
-		// minted without its credit and is idempotent on re-run — it converges to
-		// `amount` and never over-mints.
-		bal, err := p.minter.CreditBalance(ctx, tba)
+		// Fund the batch's TBA with the amount fixed on the batch at mint. Batch
+		// and credit are two txs, so a batch can exist without its credits.
+		// What is still owed is measured against the cumulative amount minted to
+		// the TBA, not its balance: the balance drops when the owner moves or
+		// retires credits, and topping that up would issue them twice.
+		minted, err := p.minter.CreditMintedTo(ctx, tba)
 		if err != nil {
-			clog.Error("CreditBalance check failed", "err", err)
+			clog.Error("CreditMintedTo check failed", "err", err)
 			failed = true
 			continue
 		}
-		shortfall := new(big.Int).Sub(amount, bal)
+		shortfall := new(big.Int).Sub(issued, minted)
 		if shortfall.Sign() <= 0 {
-			clog.Info("batch + credits already present, skipping", "batch_token", tokenID.String(), "balance", bal.String())
+			p.recordSkipped()
+			clog.Info("batch + credits already present, skipping", "batch_token", tokenID.String(), "credits_minted", minted.String())
 			continue
 		}
 		if err := p.minter.MintCredit(ctx, tba, shortfall); err != nil {
+			p.recordFailed()
 			clog.Error("credit mint failed", "batch_token", tokenID.String(), "tba", tba.Hex(), "err", err)
 			failed = true
 			continue
@@ -465,82 +629,74 @@ func (p *Pipeline) processMonitoring(ctx context.Context, mv obp.MonitoringVerif
 	}
 
 	if failed {
-		// Retry next poll; already-minted batches are skipped by BatchExists.
+		// Retry next poll; batches and credits already minted are skipped.
 		p.seenMonitoring.Delete(vID)
 	}
 }
 
-// batchRefs holds the resolved url/hash reference set shared by every batch of a
-// monitoring verification (they differ only by credit_type + amount).
-type batchRefs struct {
-	activityURI, activityHash string
-	operatorURI, operatorHash string
-	certURI, certHash         string
-	schemeURI, schemeHash     string
-	bodyURI, bodyHash         string
+// gatherBatchRefs resolves the activity, operator, certificate, scheme and body
+// a monitoring verification's batches reference. The certificate is the one
+// the verification names; an older record without one falls back to the
+// activity's most recently issued certificate.
+func (p *Pipeline) gatherBatchRefs(mv obp.MonitoringVerification) (activityRefs, certificateRefs, error) {
+	aRefs, err := p.gatherActivityRefs(mv.ActivityID)
+	if err != nil {
+		return aRefs, certificateRefs{}, err
+	}
+
+	certificateID := mv.CertificateOfComplianceID
+	if certificateID == "" {
+		cert, err := p.obp.GetLatestCertificateByActivityID(mv.ActivityID)
+		if err != nil {
+			return aRefs, certificateRefs{}, fmt.Errorf("certificate: %w", err)
+		}
+		certificateID = cert.CertificateOfComplianceID
+	}
+
+	cRefs, err := p.gatherCertificateRefs(certificateID)
+	if err != nil {
+		return aRefs, cRefs, err
+	}
+	return aRefs, cRefs, nil
 }
 
-func (r batchRefs) batchParams(to common.Address, activityNftID *big.Int, creditType string) eth.BatchParams {
+// batchStatusIssued is the status_code a batch carries at mint.
+const batchStatusIssued = "issued"
+
+func batchParams(
+	to common.Address,
+	activityNftID *big.Int,
+	b obp.CreditBatch,
+	amount *big.Int,
+	a activityRefs,
+	c certificateRefs,
+) eth.BatchParams {
 	return eth.BatchParams{
-		To:                      to,
-		ActivityNftID:           activityNftID,
-		CreditType:              creditType,
-		ActivityURI:             r.activityURI,
-		ActivityHash:            r.activityHash,
-		OperatorURI:             r.operatorURI,
-		OperatorHash:            r.operatorHash,
-		CertificationURI:        r.certURI,
-		CertificationHash:       r.certHash,
-		CertificationSchemeURI:  r.schemeURI,
-		CertificationSchemeHash: r.schemeHash,
-		CertificationBodyURI:    r.bodyURI,
-		CertificationBodyHash:   r.bodyHash,
+		To: to,
+		Data: contract.CarbonCreditBatchNFTBatchData{
+			CarbonCreditBatchId:         b.BatchID,
+			BatchName:                   b.BatchName,
+			ActivityId:                  a.activity.ActivityID,
+			ActivityNftId:               activityNftID,
+			ActivityName:                a.activity.Name,
+			ActivityUrl:                 a.activityURL,
+			ActivityHash:                a.activityHash,
+			CountryId:                   a.activity.CountryID,
+			OperatorUrl:                 a.operatorURL,
+			OperatorHash:                a.operatorHash,
+			CertificateOfComplianceUri:  c.certURL,
+			CertificateOfComplianceHash: c.certHash,
+			UnitType:                    b.UnitType,
+			MonitoringPeriodStartDate:   a.activity.MonitoringPeriodStartDate,
+			MonitoringPeriodEndDate:     a.activity.MonitoringPeriodEndDate,
+			Amount:                      amount,
+			StatusCode:                  batchStatusIssued,
+			IssueDate:                   c.cert.IssueDate,
+			ExpiryDate:                  c.cert.ExpiryDate,
+			CertificationSchemeUrl:      c.schemeURL,
+			CertificationSchemeHash:     c.schemeHash,
+			CertificationBodyUrl:        c.bodyURL,
+			CertificationBodyHash:       c.bodyHash,
+		},
 	}
-}
-
-// gatherBatchRefs fetches every entity referenced by a batch and computes its
-// url + keccak256 hash. Also returns the operator (for the recipient wallet).
-func (p *Pipeline) gatherBatchRefs(ctx context.Context, activityID string) (batchRefs, *obp.Operator, error) {
-	var r batchRefs
-
-	activity, activityBody, err := p.obp.GetActivityWithRaw(activityID)
-	if err != nil {
-		return r, nil, fmt.Errorf("activity: %w", err)
-	}
-	r.activityURI = p.obp.ActivityURL(activityID)
-	r.activityHash = crypto.Keccak256Hash(activityBody).Hex()
-
-	operator, operatorBody, err := p.obp.GetOperatorWithRaw(activity.OperatorID)
-	if err != nil {
-		return r, nil, fmt.Errorf("operator: %w", err)
-	}
-	r.operatorURI = p.obp.OperatorURL(activity.OperatorID)
-	r.operatorHash = crypto.Keccak256Hash(operatorBody).Hex()
-
-	cert, err := p.obp.GetCertificateByActivityID(activityID)
-	if err != nil {
-		return r, nil, fmt.Errorf("certificate: %w", err)
-	}
-	certBody, err := p.obp.GetCertificateRaw(cert.CertificateOfComplianceID)
-	if err != nil {
-		return r, nil, fmt.Errorf("certificate raw: %w", err)
-	}
-	r.certURI = p.obp.CertificateURL(cert.CertificateOfComplianceID)
-	r.certHash = crypto.Keccak256Hash(certBody).Hex()
-
-	schemeBody, err := p.obp.GetCertificationSchemeRaw(cert.CertificationSchemeID)
-	if err != nil {
-		return r, nil, fmt.Errorf("certification_scheme: %w", err)
-	}
-	r.schemeURI = p.obp.CertificationSchemeURL(cert.CertificationSchemeID)
-	r.schemeHash = crypto.Keccak256Hash(schemeBody).Hex()
-
-	bodyBody, err := p.obp.GetCertificationBodyRaw(cert.CertificationBodyID)
-	if err != nil {
-		return r, nil, fmt.Errorf("certification_body: %w", err)
-	}
-	r.bodyURI = p.obp.CertificationBodyURL(cert.CertificationBodyID)
-	r.bodyHash = crypto.Keccak256Hash(bodyBody).Hex()
-
-	return r, operator, nil
 }

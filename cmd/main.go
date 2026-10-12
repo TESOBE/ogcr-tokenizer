@@ -25,7 +25,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	obpClient := obp.NewClient(cfg.OBPURL, cfg.OBPUsername, cfg.OBPPassword, cfg.OBPConsumerKey)
+	obpClient := obp.NewClient(cfg.OBPURL, cfg.OBPBankID, cfg.OBPUsername, cfg.OBPPassword, cfg.OBPConsumerKey)
 
 	minter, err := eth.NewMinter(cfg.RPCURL, cfg.PrivateKey,
 		cfg.ParcelContractAddress, cfg.ActivityContractAddress, cfg.CertificationContractAddress,

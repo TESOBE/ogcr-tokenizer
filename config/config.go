@@ -10,7 +10,9 @@ import (
 )
 
 type Config struct {
-	OBPURL                       string
+	OBPURL string
+	// OBPBankID is the bank the OGCR dynamic entities live under.
+	OBPBankID                    string
 	OBPUsername                  string
 	OBPPassword                  string
 	OBPConsumerKey               string
@@ -34,6 +36,11 @@ func Load() (*Config, error) {
 	_ = godotenv.Load()
 
 	healthAddr := os.Getenv("HEALTH_ADDR")
+
+	bankID := os.Getenv("OBP_BANK_ID")
+	if bankID == "" {
+		bankID = "ogcr"
+	}
 
 	interval := 30 * time.Second
 	if s := os.Getenv("POLL_INTERVAL_SECONDS"); s != "" {
@@ -73,6 +80,7 @@ func Load() (*Config, error) {
 
 	return &Config{
 		OBPURL:                       *required["OBP_URL"],
+		OBPBankID:                    bankID,
 		OBPUsername:                  *required["OBP_USERNAME"],
 		OBPPassword:                  *required["OBP_PASSWORD"],
 		OBPConsumerKey:               *required["OBP_CONSUMER_KEY"],
