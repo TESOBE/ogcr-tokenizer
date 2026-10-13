@@ -17,6 +17,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"ogcr-tokenizer/internal/eth"
 )
 
 // State is the tokenizer's view of itself. Safe for concurrent use: the poll
@@ -31,6 +33,18 @@ type State struct {
 	lastPollOK  bool
 	lastPollErr string
 	pollCounts  map[string]int
+
+	// What the status page shows beyond the health report; see status.go.
+	about       About
+	running     bool
+	cycleStart  time.Time
+	cycleErrors int
+	nextPollAt  time.Time
+	cycles      []cycle // newest first
+	mints       []mint  // newest first
+	problems    []*problem
+	chain       *eth.ChainInfo
+	runNow      func()
 
 	minted  atomic.Int64
 	failed  atomic.Int64
@@ -144,6 +158,9 @@ func (s *State) Handler() http.Handler {
 	}
 	mux.HandleFunc("/healthz", serve)
 	mux.HandleFunc("/health", serve)
+	mux.HandleFunc("GET /alive", handleAlive)
+	mux.HandleFunc("GET /{$}", s.handleStatus)
+	mux.HandleFunc("POST /run", s.handleRun)
 	return mux
 }
 

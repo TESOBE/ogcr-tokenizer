@@ -25,6 +25,9 @@ type Pipeline struct {
 	// when no health server is configured, so every call site guards on it.
 	health *health.State
 
+	// wake cuts the wait between polls short; see RunNow.
+	wake chan struct{}
+
 	// Fast-path in-memory dedup per token type. Authoritative check is on-chain.
 	seenParcels      sync.Map
 	seenActivities   sync.Map
@@ -33,7 +36,16 @@ type Pipeline struct {
 }
 
 func New(obpClient *obp.Client, minter *eth.Minter) *Pipeline {
-	return &Pipeline{obp: obpClient, minter: minter}
+	return &Pipeline{obp: obpClient, minter: minter, wake: make(chan struct{}, 1)}
+}
+
+// RunNow starts the next poll straight away, or as soon as the current one
+// ends. Asking again while one is already queued does nothing.
+func (p *Pipeline) RunNow() {
+	select {
+	case p.wake <- struct{}{}:
+	default:
+	}
 }
 
 // WithHealth attaches a health state for the pipeline to report into.
@@ -48,9 +60,11 @@ func (p *Pipeline) recordPoll(name string, found int, err error) {
 	}
 }
 
-func (p *Pipeline) recordMinted() {
+// recordMinted counts a confirmed token mint and lists it on the status page.
+func (p *Pipeline) recordMinted(token, id, detail string) {
 	if p.health != nil {
 		p.health.Minted()
+		p.health.RecordMint(token, id, detail)
 	}
 }
 
@@ -69,17 +83,33 @@ func (p *Pipeline) recordSkipped() {
 func (p *Pipeline) Run(ctx context.Context, interval time.Duration) {
 	slog.Info("pipeline started", "poll_interval", interval)
 	for {
+		if p.health != nil {
+			p.health.BeginCycle()
+			p.recordChain(ctx)
+		}
 		p.pollParcels(ctx)
 		p.pollActivities(ctx)
 		p.pollCertificates(ctx)
 		p.pollMonitoring(ctx)
+		if p.health != nil {
+			p.health.EndCycle(interval)
+		}
 		select {
 		case <-ctx.Done():
 			slog.Info("pipeline stopped")
 			return
+		case <-p.wake:
 		case <-time.After(interval):
 		}
 	}
+}
+
+// recordChain reads the chain's state for the status page. Bounded, so a hung
+// node delays a poll by seconds rather than stopping the loop.
+func (p *Pipeline) recordChain(ctx context.Context) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	p.health.RecordChain(p.minter.Info(ctx))
 }
 
 // ---- shared lookups ----
@@ -257,7 +287,7 @@ func (p *Pipeline) processParcel(ctx context.Context, parcelID string) {
 		return
 	}
 
-	p.recordMinted()
+	p.recordMinted("ParcelNFT", parcelID, "")
 	log.Info("ParcelNFT minted successfully")
 }
 
@@ -367,7 +397,7 @@ func (p *Pipeline) processActivity(ctx context.Context, activityID string) {
 		return
 	}
 
-	p.recordMinted()
+	p.recordMinted("ActivityNFT", activityID, fmt.Sprintf("%d parcel(s)", len(parcelIDs)))
 	log.Info("ActivityNFT minted successfully")
 }
 
@@ -501,7 +531,7 @@ func (p *Pipeline) processCertificate(ctx context.Context, complianceID, activit
 		return
 	}
 
-	p.recordMinted()
+	p.recordMinted("CertificationNFT", complianceID, "on ActivityNFT #"+activityTokenID.String())
 	log.Info("CertificationNFT minted successfully")
 }
 
@@ -599,7 +629,7 @@ func (p *Pipeline) processMonitoring(ctx context.Context, mv obp.MonitoringVerif
 				failed = true
 				continue
 			}
-			p.recordMinted()
+			p.recordMinted("CarbonCreditBatchNFT", b.BatchID, b.UnitType+", token #"+tokenID.String())
 		}
 
 		// Fund the batch's TBA with the amount fixed on the batch at mint. Batch
@@ -624,6 +654,10 @@ func (p *Pipeline) processMonitoring(ctx context.Context, mv obp.MonitoringVerif
 			clog.Error("credit mint failed", "batch_token", tokenID.String(), "tba", tba.Hex(), "err", err)
 			failed = true
 			continue
+		}
+		if p.health != nil {
+			// Listed, not counted: minted_total has always counted tokens only.
+			p.health.RecordMint("CarbonCredit", b.BatchID, shortfall.String()+" base units to "+tba.Hex())
 		}
 		clog.Info("CarbonCreditBatch + credits minted", "batch_token", tokenID.String(), "tba", tba.Hex(), "minted", shortfall.String())
 	}

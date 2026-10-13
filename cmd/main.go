@@ -15,9 +15,10 @@ import (
 )
 
 func main() {
-	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+	logHandler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
-	})))
+	})
+	slog.SetDefault(slog.New(logHandler))
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -41,9 +42,14 @@ func main() {
 	// Liveness over HTTP. The tokenizer never writes to OBP, so this is the only
 	// place it can say it is alive; a chain-side backlog answers "is it keeping
 	// up" but reads as healthy when a dead tokenizer simply has no new work.
+	// The same server carries the status page at /, which lists the errors the
+	// pipeline logs, so from here on every log line also reaches the page.
 	healthState := health.NewState(cfg.PollInterval, minter.ChainID())
-	healthState.Serve(cfg.HealthAddr)
+	healthState.SetAbout(health.About{OBPURL: cfg.OBPURL, OBPBankID: cfg.OBPBankID, RPCURL: cfg.RPCURL})
+	slog.SetDefault(slog.New(health.LogHandler(logHandler, healthState)))
 
 	p := pipeline.New(obpClient, minter).WithHealth(healthState)
+	healthState.SetRunNow(p.RunNow)
+	healthState.Serve(cfg.HealthAddr)
 	p.Run(ctx, cfg.PollInterval)
 }

@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OGCR Tokenizer</title>
+<style>
+  :root {
+    --background: #f6f7f9;
+    --card: #ffffff;
+    --text: #1f2933;
+    --muted: #6b7280;
+    --border: #e2e5ea;
+    --ok: #16a34a;
+    --warn: #d97706;
+    --bad: #dc2626;
+    --idle: #9ca3af;
+    --button: #3f3f46;
+    --button-text: #ffffff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --background: #111418;
+      --card: #1a1e24;
+      --text: #e5e7eb;
+      --muted: #9ca3af;
+      --border: #2a2f37;
+      --ok: #22c55e;
+      --warn: #f59e0b;
+      --bad: #f87171;
+      --idle: #6b7280;
+      --button: #e4e4e7;
+      --button-text: #18181b;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 24px 16px 48px;
+    background: var(--background);
+    color: var(--text);
+    font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  .wrap { max-width: 960px; margin: 0 auto; display: grid; gap: 16px; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  h1 { font-size: 22px; margin: 0; }
+  .sub { color: var(--muted); font-size: 13px; }
+  .sub a { color: inherit; }
+  section {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+    overflow-x: auto;
+  }
+  h2 {
+    font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--muted); margin: 0 0 10px;
+  }
+  .status { display: flex; align-items: center; gap: 10px; font-size: 18px; font-weight: 600; }
+  .dot { width: 12px; height: 12px; border-radius: 50%; background: var(--idle); flex: none; }
+  .s-ok .dot, .dot.s-ok { background: var(--ok); }
+  .s-partial .dot, .dot.s-partial { background: var(--warn); }
+  .s-degraded .dot, .dot.s-degraded { background: var(--warn); }
+  .s-stalled .dot, .dot.s-stalled { background: var(--bad); }
+  .stale { opacity: 0.55; }
+  .count { color: var(--muted); font-size: 12px; white-space: nowrap; }
+  .facts { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px 16px; margin-top: 12px; }
+  .facts div { font-size: 13px; color: var(--muted); }
+  .facts b { display: block; color: var(--text); font-weight: 500; font-size: 15px; overflow-wrap: anywhere; }
+  .facts b.mono { font-size: 13px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th { text-align: left; font-weight: 500; color: var(--muted); font-size: 12px; padding: 4px 8px 6px 0; }
+  td { padding: 6px 8px 6px 0; border-top: 1px solid var(--border); vertical-align: top; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  code, .mono { font: 12.5px ui-monospace, "SF Mono", Menlo, monospace; }
+  .held { color: var(--ok); }
+  .missing { color: var(--bad); font-weight: 500; }
+  .muted { color: var(--muted); }
+  .bad { color: var(--bad); }
+  ul.errors { margin: 0; padding: 0; list-style: none; }
+  /* user-select: none keeps the icon out of a hand-made selection of the error. */
+  button.copy { font: inherit; font-size: 12px; padding: 1px 6px; margin-right: 4px; cursor: pointer; user-select: none;
+    border: 1px solid var(--border); border-radius: 4px; background: var(--card); color: var(--text); vertical-align: baseline; }
+  button.copy.done { color: var(--ok, #1a7f37); }
+  ul.errors li { padding: 6px 0; border-top: 1px solid var(--border); overflow-wrap: anywhere; }
+  ul.errors li:first-child { border-top: none; }
+  button {
+    font: inherit; font-weight: 500; cursor: pointer;
+    background: var(--button); color: var(--button-text);
+    border: none; border-radius: 8px; padding: 8px 14px;
+  }
+  button:disabled { opacity: 0.5; cursor: default; }
+  .hint { color: var(--muted); font-size: 13px; margin: 8px 0 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>🪙 OGCR Tokenizer</h1>
+      <div class="sub">OBP {{.Bank}} ➜ chain {{.ChainID}} · refreshes every 10s · {{.Now}} · <a href="/health">/health</a> · <a href="/alive">/alive</a></div>
+    </div>
+    {{if .CanRun}}
+    <form method="post" action="/run">
+      <button type="submit" {{if .Running}}disabled{{end}}>{{if .Running}}Polling…{{else}}Poll now{{end}}</button>
+    </form>
+    {{end}}
+  </header>
+
+  <section class="s-{{.Status}}">
+    <div class="status"><span class="dot"></span>{{.StatusLabel}}</div>
+    <div class="facts">
+      <div>Last poll<b>{{if .LastPollAgo}}{{.LastPollAgo}} ago{{else}}not yet{{end}}</b></div>
+      <div>Took<b>{{if .LastPollTook}}{{.LastPollTook}}{{else}}–{{end}}</b></div>
+      <div>{{if .Running}}Polling for<b>{{.RunningFor}}</b>{{else}}Next poll in<b>{{if .NextPollIn}}{{.NextPollIn}}{{else}}–{{end}}</b>{{end}}</div>
+      <div>Every<b>{{.Interval}}</b></div>
+      <div>Up for<b>{{.Uptime}}</b></div>
+      <div>Minted<b>{{.Minted}}</b></div>
+      <div>Failed mints<b>{{if .Failed}}<span class="bad">{{.Failed}}</span>{{else}}0{{end}}</b></div>
+      <div>Already on chain<b>{{.Skipped}}</b></div>
+      <div>OBP<b class="mono">{{.OBPURL}}</b></div>
+      <div>Bank<b class="mono">{{.Bank}}</b></div>
+    </div>
+    {{if .LastPollErr}}<p class="bad mono" style="overflow-wrap:anywhere">{{.LastPollErr}}</p>{{end}}
+    <p class="hint">Totals are since the process started. "Already on chain" counts records found minted and skipped, which is normal in steady state.</p>
+  </section>
+
+  {{with .Chain}}
+  <section>
+    <h2>Chain <span class="muted" style="text-transform:none;letter-spacing:0">· checked {{.CheckedAgo}} ago</span></h2>
+    <div class="facts" style="margin:0">
+      <div>Node<b>{{.Client}}</b></div>
+      <div>Chain ID<b>{{.ChainID}}</b></div>
+      <div>RPC<b class="mono">{{.RPCURL}}</b></div>
+      <div>Head block<b>{{if .HeadTime}}{{.HeadBlock}}{{else}}–{{end}}</b></div>
+      <div>Head block produced<b>{{if .HeadAge}}{{.HeadAge}} ago{{else}}–{{end}}</b></div>
+      <div>Head block time<b>{{if .HeadTime}}{{.HeadTime}}{{else}}–{{end}}</b></div>
+      <div>Signer<b class="mono">{{.Signer}}</b></div>
+      <div>Signer balance<b>{{if .NoGas}}<span class="missing">0 (no gas)</span>{{else}}{{.Balance}}{{end}}</b></div>
+    </div>
+    {{if .ClientVersion}}<p class="hint mono" style="overflow-wrap:anywhere">{{.ClientVersion}}</p>{{end}}
+    {{if .Err}}<p class="bad mono" style="overflow-wrap:anywhere">{{.Err}}</p>{{end}}
+    {{if .NoGas}}<p class="hint">Every mint is a transaction from the signer, so none can be sent until it is funded.</p>{{end}}
+    {{if .Contracts}}
+    <table style="margin-top:12px">
+      <tr><th>Contract</th><th>Address</th><th>On this chain</th></tr>
+      {{range .Contracts}}
+      <tr>
+        <td>{{.Name}}</td>
+        <td class="mono" style="overflow-wrap:anywhere">{{.Address.Hex}}</td>
+        <td>{{if .Err}}<span class="bad">could not check:</span> <span class="mono" style="overflow-wrap:anywhere">{{.Err}}</span>{{else if .CodeBytes}}<span class="held">✓ deployed</span> <span class="muted">({{.CodeBytes}} bytes)</span>{{else}}<span class="missing">✗ no code at this address</span>{{end}}</td>
+      </tr>
+      {{end}}
+    </table>
+    {{if .MissingContracts}}
+    <p class="hint">{{.MissingContracts}} configured address{{if gt .MissingContracts 1}}es hold{{else}} holds{{end}} no contract on chain {{.ChainID}}: the contracts were deployed to a different chain, or not yet. Mints to {{if gt .MissingContracts 1}}them{{else}}it{{end}} cannot succeed.</p>
+    {{end}}
+    {{end}}
+  </section>
+  {{end}}
+
+  {{if .Eligible}}
+  <section>
+    <h2>Last poll</h2>
+    <table>
+      <tr><th>Trigger</th><th class="num">Eligible to mint</th></tr>
+      {{range .Eligible}}
+      <tr><td><code>{{.Name}}</code></td><td class="num">{{.Count}}</td></tr>
+      {{end}}
+    </table>
+    <p class="hint">Records that could be minted, not new work: most are already on chain and skipped.</p>
+  </section>
+  {{end}}
+
+  {{if .Problems}}
+  <section>
+    <h2>Errors in the last hour ({{len .Problems}}) <button type="button" class="copy" data-copy-all title="Copy all errors">⧉ copy all</button></h2>
+    <p class="hint" style="margin:0 0 6px">Each distinct error once, newest first. A record that cannot be minted is retried every poll, so its count keeps rising until it is fixed; greyed out ones have not recurred for three polls.</p>
+    <ul class="errors">
+      {{range .Problems}}<li{{if .Stale}} class="stale"{{end}}><button type="button" class="copy" title="Copy this error">⧉</button> <span class="mono err-text">{{.Text}}</span> <span class="count">×{{.Count}} · last {{.LastAgo}} ago{{if gt .Count 1}} · first {{.FirstAgo}} ago{{end}}</span></li>{{end}}
+    </ul>
+  </section>
+  {{end}}
+
+  <section>
+    <h2>Recent mints</h2>
+    {{if .Mints}}
+    <table>
+      <tr><th>At</th><th>Token</th><th>Record</th><th></th></tr>
+      {{range .Mints}}
+      <tr>
+        <td class="mono" title="{{.Ago}} ago">{{.At}}</td>
+        <td>{{.Token}}</td>
+        <td class="mono" style="overflow-wrap:anywhere">{{.ID}}</td>
+        <td class="muted mono">{{.Detail}}</td>
+      </tr>
+      {{end}}
+    </table>
+    {{else}}
+    <p class="muted" style="margin:0">None since the process started.</p>
+    {{end}}
+  </section>
+
+  {{if .History}}
+  <section>
+    <h2>Recent polls</h2>
+    <table>
+      <tr><th>Finished</th><th>OBP</th><th class="num">Eligible</th><th class="num">Errors logged</th><th class="num">Took</th></tr>
+      {{range .History}}
+      <tr>
+        <td class="mono">{{.At}}</td>
+        <td><span class="dot {{if .OK}}s-ok{{else}}s-degraded{{end}}" style="display:inline-block;width:8px;height:8px;margin-right:6px"></span>{{if .OK}}ok{{else}}failed{{end}}</td>
+        <td class="num">{{.Eligible}}</td>
+        <td class="num">{{if .Errors}}<span class="bad">{{.Errors}}</span>{{else}}0{{end}}</td>
+        <td class="num">{{.Took}}</td>
+      </tr>
+      {{end}}
+    </table>
+    <p class="hint">Mints run in the background and can finish after the poll that found them, so their errors may land in a later row.</p>
+  </section>
+  {{end}}
+</div>
+<script>
+  // Reload every 10s, but not while text is selected or the tab is hidden, so
+  // a selection survives long enough to copy.
+  function copyText(text, btn) {
+    function done() { var t = btn.textContent; btn.textContent = '✓ copied'; btn.classList.add('done');
+      setTimeout(function () { btn.textContent = t; btn.classList.remove('done'); }, 1500); }
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text).then(done);
+    } else {
+      // Plain http on a non-local address has no clipboard API.
+      var ta = document.createElement('textarea');
+      ta.value = text; document.body.appendChild(ta); ta.select();
+      document.execCommand('copy'); document.body.removeChild(ta); done();
+    }
+  }
+  document.addEventListener('click', function (e) {
+    var btn = e.target.closest('button.copy');
+    if (!btn) return;
+    var text = btn.hasAttribute('data-copy-all')
+      ? Array.prototype.map.call(btn.closest('section').querySelectorAll('.err-text'), function (el) { return el.textContent; }).join('\n')
+      : btn.parentNode.querySelector('.err-text').textContent;
+    copyText(text, btn);
+  });
+  setInterval(function () {
+    var sel = window.getSelection && window.getSelection().toString();
+    if (!sel && !document.hidden) location.reload();
+  }, 10000);
+</script>
+</body>
+</html>

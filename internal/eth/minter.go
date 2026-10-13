@@ -32,6 +32,14 @@ type Minter struct {
 	chainID     *big.Int
 	nonceMu     sync.Mutex
 	nonce       uint64
+
+	// contracts lists the configured addresses for the status page.
+	contracts []namedAddress
+}
+
+type namedAddress struct {
+	name    string
+	address common.Address
 }
 
 // ChainID is the chain the minter is bound to. Exposed for the health report,
@@ -102,6 +110,13 @@ func NewMinter(rpcURL, privateKeyHex, parcelAddr, activityAddr, certificateAddr,
 		auth:        auth,
 		chainID:     chainID,
 		nonce:       nonce,
+		contracts: []namedAddress{
+			{"ParcelNFT", common.HexToAddress(parcelAddr)},
+			{"ActivityNFT", common.HexToAddress(activityAddr)},
+			{"CertificationNFT", common.HexToAddress(certificateAddr)},
+			{"CarbonCreditBatchNFT", common.HexToAddress(batchAddr)},
+			{"CarbonCredit", common.HexToAddress(creditAddr)},
+		},
 	}, nil
 }
 

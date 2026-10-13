@@ -59,8 +59,35 @@ not doing anything useful, so there is no state where one should pass and the
 other fail. The liveness probe is deliberately slack, because a restart mid-mint
 is worse than a slow recovery.
 
+## Status page
+
+`GET /` on the same address is a status page for people, modelled on the
+OGCR-chain-cache one. It refreshes every 10 seconds and shows:
+
+- the headline status, with the poll timings and the mint totals;
+- the chain: node, head block and its age, the signing account and its balance,
+  and whether each configured contract has code on this chain;
+- how many records each trigger entity had eligible on the last poll;
+- **errors in the last hour**: every Error log line, shown once with a count,
+  since a record that cannot be minted is retried (and logged) every poll;
+- recent mints and recent polls (kept in memory, so they reset on restart).
+
+The headline also turns `degraded` when OBP polls fine but minting cannot work:
+the chain is unreachable, a contract is missing, or the signer has no gas.
+`/healthz` is unchanged by these, so the probes do not restart a pod over them.
+
+`POST /run` (the "Poll now" button) starts the next poll without waiting out the
+interval. `GET /alive` returns `true`, the same as OBP-API and the chain cache.
+
 ## On the marketplace status page
 
 Set `TOKENIZER_HEALTH_URL` in OGCR-App to this endpoint and it appears on
 `/status` alongside OBP, Redis and the OIDC providers. Left unset it is simply
 not monitored, rather than permanently unhealthy.
+
+## Demo mode
+
+`go run ./cmd/demo` serves the status page with made-up data on
+`http://127.0.0.1:8767/` (change it with `-addr`). It connects to nothing and
+never mints, so it needs no `.env`; it is for seeing the page, not testing the
+tokenizer.
