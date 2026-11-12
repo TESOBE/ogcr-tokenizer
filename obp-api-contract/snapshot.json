@@ -1,0 +1,25 @@
+{
+ "about": "Written by obp-api-contract/snapshot.py; do not edit by hand.",
+ "obp_api": {},
+ "taken_at": "2026-11-12T23:21:08Z",
+ "endpoints": [
+  {
+   "verb": "POST",
+   "path": "/my/logins/direct",
+   "unversioned": true,
+   "missing": true
+  },
+  {
+   "verb": "GET",
+   "path": "/obp/dynamic-entity/banks/BANK_ID/ENTITY",
+   "unversioned": true,
+   "missing": true
+  },
+  {
+   "verb": "GET",
+   "path": "/obp/dynamic-entity/banks/BANK_ID/ENTITY/RECORD_ID",
+   "unversioned": true,
+   "missing": true
+  }
+ ]
+}
