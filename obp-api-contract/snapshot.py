@@ -19,6 +19,12 @@ Matching: OBP writes placeholders in capitals (BANK_ID) and so are some literal 
 when the documented one is in capitals (a placeholder for a value the call fills in), or
 when both are in capitals. The documented path with the most equal segments wins.
 
+A literal segment also matches a placeholder, so a call whose own endpoint is gone can match
+a neighbouring one (/consumers/current/scopes against /consumers/CONSUMER_ID/scopes). To keep
+that from passing unnoticed, a call that matched one operation in the snapshot.json already on
+disk and now matches another is listed and nothing is written; check each one, then rerun
+with --accept-rebind.
+
 A path with no /obp/vX.Y.Z prefix (DirectLogin at /my/logins/direct, the unversioned
 /obp/dynamic-entity/... routes) belongs to no version's resource docs, so it is not looked
 up: it is recorded as missing and unversioned, and the contract must say why.
@@ -88,6 +94,8 @@ def main():
     ap.add_argument("--base", required=True, help="OBP-API base URL")
     ap.add_argument("--fallback", help="OBP-API that still serves the versions --base switched off")
     ap.add_argument("--out", default=os.path.join(HERE, "snapshot.json"))
+    ap.add_argument("--accept-rebind", action="store_true",
+                    help="write the snapshot although calls now match a different operation than before")
     args = ap.parse_args()
     base = args.base.rstrip("/")
     contract = json.load(open(os.path.join(HERE, "contract.json")))
@@ -142,6 +150,20 @@ def main():
         else:
             entry["missing"] = True
         endpoints.append(entry)
+
+    try:
+        with open(args.out) as f:
+            before = {(e["verb"], e["path"]): e.get("operation_id") for e in json.load(f)["endpoints"]}
+    except (OSError, ValueError, KeyError):
+        before = {}
+    rebound = [f'{e["verb"]} {e["path"]}: was {before[(e["verb"], e["path"])]}, now {e["operation_id"]}'
+               for e in endpoints
+               if e.get("operation_id") and before.get((e["verb"], e["path"])) not in (None, e["operation_id"])]
+    for line in rebound:
+        print(f"  matches another operation: {line}", file=sys.stderr)
+    if rebound and not args.accept_rebind:
+        sys.exit(f"{args.out} not written: {len(rebound)} call(s) match a different operation than before, "
+                 "which usually means their own endpoint is gone. Check each one, then rerun with --accept-rebind.")
 
     snapshot = {
         "about": "Written by obp-api-contract/snapshot.py; do not edit by hand.",
