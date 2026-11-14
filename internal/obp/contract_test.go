@@ -169,9 +169,14 @@ func TestEveryOBPAPICallInTheSourceIsInTheContract(t *testing.T) {
 
 func TestTheSnapshotWasTakenForThisContract(t *testing.T) {
 	// Tests that snapshot.json holds exactly the calls of contract.json; otherwise rerun snapshot.py.
+	// A call made from two places is listed twice in contract.json and once in the snapshot.
 	var listed, snapped []string
+	seen := map[string]bool{}
 	for _, c := range calls(t) {
-		listed = append(listed, c.key())
+		if !seen[c.key()] {
+			seen[c.key()] = true
+			listed = append(listed, c.key())
+		}
 	}
 	for k := range snapshot(t) {
 		snapped = append(snapped, k)
