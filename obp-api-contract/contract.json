@@ -1,0 +1,45 @@
+{
+ "about": "Every OBP-API call the tokenizer makes, all through internal/obp/client.go: verb, path (OBP placeholders in capitals; ENTITY is one of the entity names in internal/obp/client.go), the source file and the text that makes the call (needles), and the response fields the code reads. scripts/create_test_data.py, which seeds test data, is not listed. internal/obp/contract_test.go checks this list against the source and against snapshot.json, which obp-api-contract/snapshot.py writes from an OBP-API's resource docs.",
+ "calls": [
+  {
+   "verb": "POST",
+   "path": "/my/logins/direct",
+   "source": "internal/obp/client.go",
+   "needles": [
+    "c.baseURL+\"/my/logins/direct\""
+   ],
+   "reads": [
+    "token"
+   ],
+   "undocumented_endpoint": "the unversioned DirectLogin route has no resource doc; OBP-API documents DirectLogin as POST /obp/v6.0.0/my/logins/direct (OBPv6.0.0-directLoginEndpoint, also listed under v7.0.0, answering token), but the snapshot cannot show that both reach the same implementation, so the call is left as it is"
+  },
+  {
+   "verb": "GET",
+   "path": "/obp/dynamic-entity/banks/BANK_ID/ENTITY",
+   "source": "internal/obp/client.go",
+   "needles": [
+    "\"/obp/dynamic-entity/banks/\" + url.PathEscape(c.bankID) + \"/\" + entity",
+    "c.getRaw(c.entityPath(entity), params)"
+   ],
+   "reads": [
+    "ENTITY_list[]"
+   ],
+   "note": "Filtered by status_code, parcel_id or activity_id. Each record is decoded into its type in internal/obp/types.go.",
+   "undocumented_endpoint": "dynamic entity, defined at run time"
+  },
+  {
+   "verb": "GET",
+   "path": "/obp/dynamic-entity/banks/BANK_ID/ENTITY/RECORD_ID",
+   "source": "internal/obp/client.go",
+   "needles": [
+    "\"/obp/dynamic-entity/banks/\" + url.PathEscape(c.bankID) + \"/\" + entity",
+    "c.getRaw(c.recordPath(entity, id), nil)"
+   ],
+   "reads": [
+    "ENTITY"
+   ],
+   "note": "The record under the entity name is decoded into its type in internal/obp/types.go, and the raw body is hashed (keccak256) into the token's integrity hash. The same URL is stored on-chain as the record's link.",
+   "undocumented_endpoint": "dynamic entity, defined at run time"
+  }
+ ]
+}
