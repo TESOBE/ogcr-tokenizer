@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -252,5 +253,66 @@ func TestARenamedOrRemovedFieldIsReported(t *testing.T) {
 	}
 	if got := undocumentedReads(read, map[string]bool{}); !reflect.DeepEqual(got, read) {
 		t.Errorf("undocumentedReads = %q, want %q", got, read)
+	}
+}
+
+// pathVersion is the /obp/vX.Y.Z/ segment of an OBP-API path.
+var pathVersion = regexp.MustCompile(`/obp/v\d+\.\d+\.\d+/`)
+
+// versionMismatch returns what is wrong when an entry's path and its needles
+// name different OBP-API versions, or "" when they agree. A path with a
+// version needs a needle that spells the same version and none that spells
+// another; a path without one (DirectLogin, dynamic-entity) needs no needle
+// with a version.
+func versionMismatch(path string, needles []string) string {
+	want := pathVersion.FindString(path)
+	found := false
+	for _, n := range needles {
+		for _, got := range pathVersion.FindAllString(n, -1) {
+			if got != want {
+				if want == "" {
+					return "needle spells " + got + " but the path has no version"
+				}
+				return "needle spells " + got + " but the path has " + want
+			}
+			found = true
+		}
+	}
+	if want != "" && !found {
+		return "no needle spells " + want
+	}
+	return ""
+}
+
+func TestEachPathHasTheVersionOfItsNeedles(t *testing.T) {
+	// Tests that the version in an entry's path is the version the source spells: moving a call to another
+	// version in client.go and in its needle alone must also change the path (and so the snapshot).
+	for _, c := range calls(t) {
+		if msg := versionMismatch(c.Path, c.Needles); msg != "" {
+			t.Errorf("%s: %s", c.key(), msg)
+		}
+	}
+}
+
+func TestAVersionThatDiffersFromThePathIsReported(t *testing.T) {
+	// Tests the check itself: the version has to agree both ways, and an unversioned path needs unversioned needles.
+	cases := []struct {
+		path    string
+		needles []string
+		bad     bool
+	}{
+		{"/obp/v7.0.0/consumers/current/platform-app", []string{`"/obp/v7.0.0/consumers/current/platform-app"`}, false},
+		{"/obp/v7.0.0/consumers/current/platform-app", []string{`"/obp/v6.0.0/consumers/current/platform-app"`}, true},
+		{"/obp/v7.0.0/x", []string{`"/obp/v7.0.0/x"`, `c.do("GET", c.x())`}, false},
+		{"/obp/v7.0.0/x", []string{`c.do("GET", c.x())`}, true},
+		{"/obp/v7.0.0/x", []string{`"/obp/v7.0.0/x"`, `"/obp/v7.1.0/x"`}, true},
+		{"/obp/dynamic-entity/banks/BANK_ID/ENTITY", []string{`"/obp/dynamic-entity/banks/"`}, false},
+		{"/obp/dynamic-entity/banks/BANK_ID/ENTITY", []string{`"/obp/v7.0.0/dynamic-entity/banks/"`}, true},
+		{"/my/logins/direct", []string{`c.baseURL+"/my/logins/direct"`}, false},
+	}
+	for _, c := range cases {
+		if got := versionMismatch(c.path, c.needles) != ""; got != c.bad {
+			t.Errorf("versionMismatch(%q, %q) reported %v, want %v", c.path, c.needles, got, c.bad)
+		}
 	}
 }
