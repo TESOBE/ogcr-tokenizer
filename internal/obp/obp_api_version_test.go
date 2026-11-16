@@ -96,7 +96,7 @@ func sourceFiles(t *testing.T, root string) []string {
 
 var (
 	obpVersion  = regexp.MustCompile(`obp/v(\d+)\.(\d+)\.(\d+)`)
-	bareVersion = regexp.MustCompile(`["']v(\d+)\.(\d+)\.(\d+)["']`)
+	bareVersion = regexp.MustCompile("[\"'`]v(\\d+)\\.(\\d+)\\.(\\d+)[\"'`]")
 )
 
 // versionsBelowV510 returns every `obp/vX.Y.Z`, and every "vX.Y.Z" string, in
@@ -179,6 +179,7 @@ func TestRecognisesTheWaysAPathBelowV510CanBeWritten(t *testing.T) {
 		`"/obp/v2.2.0/x" and "/obp/v1.2.1/y"`:        {"obp/v2.2.0", "obp/v1.2.1"},
 		`const apiVersion = "v4.0.0"`:                {`"v4.0.0"`},
 		`API_VERSION = 'v3.1.0'`:                     {`'v3.1.0'`},
+		"const apiVersion = `v2.0.0`":                {"`v2.0.0`"},
 		`fmt.Sprintf("%s/obp/v5.1.0/x", base)`:       nil,
 		"/obp/v6.0.0/root and /obp/v7.0.0/consumers": nil,
 		"/obp/dynamic-entity/x":                      nil,

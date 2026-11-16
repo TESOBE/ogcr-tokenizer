@@ -97,11 +97,36 @@ type obpPathLine struct {
 	line string
 }
 
+// pathLiteral is a string or raw string that starts with a URL path.
+var pathLiteral = regexp.MustCompile("[\"`]/[A-Za-z.]")
+
+// buildsOBPPath reports whether a line of code (comments already skipped)
+// builds an OBP-API path: it writes an /obp/ path or a DirectLogin path in a
+// string or raw string, or, in a file that makes OBP-API calls, any string that
+// starts with a URL path (/oauth/..., /my/..., whatever OBP-API adds).
+func buildsOBPPath(code string, makesCalls bool) bool {
+	if !strings.ContainsAny(code, "\"`") {
+		return false
+	}
+	if strings.Contains(code, "/obp/") || strings.Contains(code, "/my/logins/") {
+		return true
+	}
+	return makesCalls && pathLiteral.MatchString(code)
+}
+
+// notOBPAPI maps `file|fragment` to why a line that starts a URL path is not an
+// OBP-API call and so needs no contract entry.
+var notOBPAPI = map[string]string{}
+
 // obpPathLines returns the lines of non-test Go source that build an OBP-API
-// path (an /obp/ path or DirectLogin), skipping comments.
+// path, skipping comments and the lines listed in notOBPAPI.
 func obpPathLines(t *testing.T) []obpPathLine {
 	t.Helper()
 	root := repoRoot(t)
+	makesCalls := map[string]bool{}
+	for _, c := range calls(t) {
+		makesCalls[c.Source] = true
+	}
 	var out []obpPathLine
 	for _, rel := range sourceFiles(t, root) {
 		if !strings.HasSuffix(rel, ".go") || strings.HasSuffix(rel, "_test.go") {
@@ -116,12 +141,61 @@ func obpPathLines(t *testing.T) []obpPathLine {
 			if strings.HasPrefix(code, "//") {
 				continue
 			}
-			if strings.Contains(code, `"`) && (strings.Contains(code, "/obp/") || strings.Contains(code, "/my/logins/")) {
+			if buildsOBPPath(code, makesCalls[rel]) && !isNotOBPAPI(rel, line) {
 				out = append(out, obpPathLine{rel, i + 1, line})
 			}
 		}
 	}
 	return out
+}
+
+func isNotOBPAPI(rel, line string) bool {
+	for key := range notOBPAPI {
+		file, fragment, _ := strings.Cut(key, "|")
+		if file == rel && strings.Contains(line, fragment) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestEveryNotOBPAPILineStillExists(t *testing.T) {
+	// Tests that each notOBPAPI entry still matches a line, so a line that was removed or became an
+	// OBP-API call does not stay excused.
+	root := repoRoot(t)
+	for key := range notOBPAPI {
+		file, fragment, _ := strings.Cut(key, "|")
+		text, err := os.ReadFile(filepath.Join(root, file))
+		if err != nil || !strings.Contains(string(text), fragment) {
+			t.Errorf("stale notOBPAPI entry: %s", key)
+		}
+	}
+}
+
+func TestRecognisesTheWaysAnOBPPathCanBeBuilt(t *testing.T) {
+	// Tests the coverage filter itself: raw strings and routes other than /obp/ are found in a file that
+	// makes OBP-API calls, and only /obp/ and DirectLogin paths elsewhere.
+	cases := []struct {
+		code       string
+		makesCalls bool
+		want       bool
+	}{
+		{`u := base + "/obp/v7.0.0/banks"`, false, true},
+		{"u := base + `/obp/v7.0.0/banks`", false, true},
+		{`req, _ := http.NewRequest("POST", c.baseURL+"/my/logins/direct", nil)`, false, true},
+		{`u := c.baseURL + "/oauth/initiate"`, true, true},
+		{"u := c.baseURL + `/my/accounts`", true, true},
+		{`mux.HandleFunc("/healthz", serve)`, false, false},
+		{`mux.HandleFunc("/healthz", serve)`, true, true},
+		{`strings.TrimRight(baseURL, "/")`, true, false},
+		{`req.Header.Set("Content-Type", "application/json")`, true, false},
+		{`fullURL := c.baseURL + path`, true, false},
+	}
+	for _, c := range cases {
+		if got := buildsOBPPath(c.code, c.makesCalls); got != c.want {
+			t.Errorf("buildsOBPPath(%q, %v) = %v, want %v", c.code, c.makesCalls, got, c.want)
+		}
+	}
 }
 
 func TestEveryCallInTheContractIsInItsSourceFile(t *testing.T) {
