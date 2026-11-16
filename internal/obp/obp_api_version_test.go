@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -26,12 +27,11 @@ import (
 // fragment. Empty: no path below v5.1.0 is used.
 var belowV510 = map[string]string{}
 
-// Where OBP-API paths are written: Go code, the test data script and the
-// Kubernetes manifests.
+// The files scanned, anywhere in the repository: Go code, the test data script
+// and the Kubernetes manifests.
 var (
-	versionSourceRoots = []string{"cmd", "config", "internal", "scripts", "k8s"}
-	versionExtensions  = []string{".go", ".py", ".sh", ".json", ".yml", ".yaml"}
-	versionSkipDirs    = []string{"bin", "vendor", "node_modules", "__pycache__"}
+	versionExtensions = []string{".go", ".py", ".sh", ".json", ".yml", ".yaml"}
+	versionSkipDirs   = []string{"bin", "vendor", "node_modules", "__pycache__"}
 )
 
 // thisFile is this test, whose examples name old versions on purpose.
@@ -56,37 +56,40 @@ func hasSuffix(name string, suffixes []string) bool {
 	return false
 }
 
-// sourceFiles lists the files under the source roots, relative to root, with
-// forward slashes.
+// sourceFiles lists every file of the repository with one of the extensions
+// above, relative to root and with forward slashes. It walks the whole tree,
+// so code in a directory added later (pkg/, tools/) or at the root is read too;
+// hidden directories and the skip list are left out.
 func sourceFiles(t *testing.T, root string) []string {
 	t.Helper()
 	var files []string
-	for _, dir := range versionSourceRoots {
-		err := filepath.WalkDir(filepath.Join(root, dir), func(path string, d fs.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			name := d.Name()
-			if d.IsDir() {
-				for _, skip := range versionSkipDirs {
-					if name == skip {
-						return filepath.SkipDir
-					}
-				}
-				if strings.HasPrefix(name, ".") {
-					return filepath.SkipDir
-				}
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		name := d.Name()
+		if d.IsDir() {
+			if path == root {
 				return nil
 			}
-			if hasSuffix(name, versionExtensions) {
-				rel, _ := filepath.Rel(root, path)
-				files = append(files, filepath.ToSlash(rel))
+			for _, skip := range versionSkipDirs {
+				if name == skip {
+					return filepath.SkipDir
+				}
+			}
+			if strings.HasPrefix(name, ".") {
+				return filepath.SkipDir
 			}
 			return nil
-		})
-		if err != nil && !os.IsNotExist(err) {
-			t.Fatal(err)
 		}
+		if hasSuffix(name, versionExtensions) {
+			rel, _ := filepath.Rel(root, path)
+			files = append(files, filepath.ToSlash(rel))
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 	return files
 }
@@ -186,5 +189,29 @@ func TestRecognisesTheWaysAPathBelowV510CanBeWritten(t *testing.T) {
 		if got := versionsBelowV510(line); !reflect.DeepEqual(got, want) {
 			t.Errorf("versionsBelowV510(%q) = %q, want %q", line, got, want)
 		}
+	}
+}
+
+func TestScansEverySourceDirectoryOfTheRepository(t *testing.T) {
+	// Tests that the scan is not limited to a few named directories: a package under pkg/, a tool under
+	// tools/ and a file at the repository root are read, while hidden, vendor and bin directories are not.
+	root := t.TempDir()
+	for _, rel := range []string{
+		"main.go", "pkg/api/api.go", "tools/call.sh", "internal/x/x.go", "docs/notes.md",
+		".git/hooks/h.sh", ".github/workflows/w.yml", "vendor/v/v.go", "bin/b.sh", "node_modules/n/n.json",
+	} {
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := sourceFiles(t, root)
+	sort.Strings(got)
+	want := []string{"internal/x/x.go", "main.go", "pkg/api/api.go", "tools/call.sh"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("sourceFiles = %q, want %q", got, want)
 	}
 }
