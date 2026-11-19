@@ -2,17 +2,23 @@ package obp
 
 import "testing"
 
-func TestEntityPathsFollowTheSpace(t *testing.T) {
-	bank := NewClient("http://obp.test/", "u", "p", "k", "ogcr")
-	if got, want := bank.ParcelURL("p1"), "http://obp.test/obp/dynamic-entity/banks/ogcr/parcel/p1"; got != want {
-		t.Errorf("bank ParcelURL = %q, want %q", got, want)
+// Every path is scoped to the bank the client was made for: the registry keeps the OGCR entities at bank level.
+func TestEntityPathsFollowTheBank(t *testing.T) {
+	c := NewClient("http://obp.test/", "ogcr", "u", "p", "k")
+	if got, want := c.ParcelURL("p1"), "http://obp.test/obp/dynamic-entity/banks/ogcr/parcel/p1"; got != want {
+		t.Errorf("ParcelURL = %q, want %q", got, want)
 	}
-	if got, want := bank.entityPath("activity_verification"), "/obp/dynamic-entity/banks/ogcr/activity_verification"; got != want {
-		t.Errorf("bank entityPath = %q, want %q", got, want)
+	if got, want := c.entityPath("activity_verification"), "/obp/dynamic-entity/banks/ogcr/activity_verification"; got != want {
+		t.Errorf("entityPath = %q, want %q", got, want)
 	}
+	if got, want := c.ActivityURL("a1"), "http://obp.test/obp/dynamic-entity/banks/ogcr/activity/a1"; got != want {
+		t.Errorf("ActivityURL = %q, want %q", got, want)
+	}
+}
 
-	sys := NewClient("http://obp.test", "u", "p", "k", "")
-	if got, want := sys.ActivityURL("a1"), "http://obp.test/obp/dynamic-entity/activity/a1"; got != want {
-		t.Errorf("system ActivityURL = %q, want %q", got, want)
+func TestTheBankIdIsEscapedInThePath(t *testing.T) {
+	c := NewClient("http://obp.test", "a b/c", "u", "p", "k")
+	if got, want := c.entityPath("parcel"), "/obp/dynamic-entity/banks/a%20b%2Fc/parcel"; got != want {
+		t.Errorf("entityPath = %q, want %q", got, want)
 	}
 }
