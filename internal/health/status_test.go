@@ -13,6 +13,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 
 	"ogcr-tokenizer/internal/eth"
+	"ogcr-tokenizer/internal/obp"
 )
 
 func page(t *testing.T, s *State) string {
@@ -85,5 +86,31 @@ func TestRunNowButton(t *testing.T) {
 	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/run", nil))
 	if !called || rec.Code != http.StatusSeeOther {
 		t.Fatalf("called=%v code=%d, want true / 303", called, rec.Code)
+	}
+}
+
+func TestStatusPageShowsThePlatformApp(t *testing.T) {
+	s := NewState(30*time.Second, 20253)
+	if body := page(t, s); !strings.Contains(body, "Not declared yet") {
+		t.Error("page should say the Scopes are not declared yet")
+	}
+
+	s.RecordPlatformApp(nil, errors.New("OBP-20400: Consumer consumer-1 is not a Platform App"))
+	if body := page(t, s); !strings.Contains(body, "Could not declare") || !strings.Contains(body, "consumer-1 is not a Platform App") {
+		t.Error("page should show why the declaration failed")
+	}
+
+	s.RecordPlatformApp(&obp.PlatformApp{ConsumerID: "consumer-1", RequiredScopes: []obp.DeclaredScope{
+		{Scope: obp.Scope{RoleName: "CanGetDynamicEntityRecord_parcel", BankID: "ogcr"}, Held: true},
+		{Scope: obp.Scope{RoleName: "CanGetDynamicEntityRecord_activity", BankID: "ogcr"}},
+	}}, nil)
+	body := page(t, s)
+	for _, want := range []string{"consumer-1", "1 missing", "CanGetDynamicEntityRecord_activity", "✗ missing", "/consumers/consumer-1/scopes"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("page lacks %q", want)
+		}
+	}
+	if strings.Contains(body, "Could not declare") {
+		t.Error("a successful declaration should clear the earlier error")
 	}
 }

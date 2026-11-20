@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"ogcr-tokenizer/internal/eth"
+	"ogcr-tokenizer/internal/obp"
 )
 
 // The status page at / is the human view of the same State: what the
@@ -44,6 +45,19 @@ func (s *State) SetAbout(a About) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.about = a
+}
+
+// RecordPlatformApp notes the result of declaring the Platform App's Scopes:
+// the app as OBP reports it, or the error that stopped the declaration.
+func (s *State) RecordPlatformApp(app *obp.PlatformApp, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.appCheckedAt = time.Now()
+	if err != nil {
+		s.appErr = err.Error()
+		return
+	}
+	s.app, s.appErr = app, ""
 }
 
 // SetRunNow wires the page's "Poll now" button to the poll loop.
@@ -218,6 +232,10 @@ type statusView struct {
 	Problems            []problemRow
 	Mints               []mintRow
 	History             []historyRow
+	App                 *obp.PlatformApp
+	AppErr              string
+	AppMissing          int
+	AppCheckedAgo       string
 }
 
 type eligibleRow struct {
@@ -297,6 +315,13 @@ func (s *State) handleStatus(w http.ResponseWriter, _ *http.Request) {
 		if n, ok := s.pollCounts[name]; ok {
 			v.Eligible = append(v.Eligible, eligibleRow{name, n})
 		}
+	}
+	v.App, v.AppErr = s.app, s.appErr
+	if s.app != nil {
+		v.AppMissing = len(s.app.Missing())
+	}
+	if !s.appCheckedAt.IsZero() {
+		v.AppCheckedAgo = roundDuration(now.Sub(s.appCheckedAt))
 	}
 	if s.chain != nil {
 		v.Chain = newChainView(*s.chain, hostOnly(s.about.RPCURL))

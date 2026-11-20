@@ -6,13 +6,28 @@ import (
 	"testing"
 )
 
-// fakeOBP serves fixed bodies by request path (plus query), and DirectLogin.
+// fakeOBP serves fixed bodies by request path (plus query). It is also the
+// OIDC issuer: it serves discovery and a client credentials token, and refuses
+// any OBP request without that token.
 func fakeOBP(t *testing.T, routes map[string]string) *httptest.Server {
 	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/my/logins/direct" {
-			w.WriteHeader(http.StatusCreated)
-			_, _ = w.Write([]byte(`{"token":"t"}`))
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/.well-known/openid-configuration":
+			_, _ = w.Write([]byte(`{"token_endpoint":"` + srv.URL + `/token"}`))
+			return
+		case "/token":
+			id, secret, ok := r.BasicAuth()
+			if !ok || id != "tokenizer" || secret != "s3cret" || r.FormValue("grant_type") != "client_credentials" {
+				http.Error(w, `{"error":"invalid_client"}`, http.StatusUnauthorized)
+				return
+			}
+			_, _ = w.Write([]byte(`{"access_token":"t","token_type":"Bearer","expires_in":300}`))
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer t" {
+			http.Error(w, `{"code":401,"message":"OBP-20001: User not logged in."}`, http.StatusUnauthorized)
 			return
 		}
 		key := r.URL.Path
@@ -30,6 +45,11 @@ func fakeOBP(t *testing.T, routes map[string]string) *httptest.Server {
 	return srv
 }
 
+// newTestClient is a client of srv for bank ogcr, with the client fakeOBP knows.
+func newTestClient(srv *httptest.Server) *Client {
+	return NewClient(srv.URL, "ogcr", srv.URL, "tokenizer", "s3cret")
+}
+
 func TestBankLevelPathsAndDecoding(t *testing.T) {
 	const activityBody = `{"bank_id":"ogcr","activity":{"activity_id":"a-1","name":"Alpha","activity_type":"CARBON_FARMING","country_id":"DK","operator_id":"op-1"}}`
 	srv := fakeOBP(t, map[string]string{
@@ -41,7 +61,7 @@ func TestBankLevelPathsAndDecoding(t *testing.T) {
 			{"certificate_of_compliance_id":"coc-new","activity_id":"a-1","issue_date":"2026-01-01","permanent_net_carbon_removal_benefit":6.5},
 			{"certificate_of_compliance_id":"coc-mid","activity_id":"a-1","issue_date":"2025-06-01"}]}`,
 	})
-	c := NewClient(srv.URL, "ogcr", "u", "p", "k")
+	c := newTestClient(srv)
 
 	activity, raw, err := c.GetActivityWithRaw("a-1")
 	if err != nil {
@@ -82,7 +102,7 @@ func TestMissingRecordIsAnError(t *testing.T) {
 	srv := fakeOBP(t, map[string]string{
 		"/obp/dynamic-entity/banks/ogcr/parcel_activity?parcel_id=p-9": `{"bank_id":"ogcr","parcel_activity_list":[]}`,
 	})
-	c := NewClient(srv.URL, "ogcr", "u", "p", "k")
+	c := newTestClient(srv)
 
 	if _, _, err := c.GetActivityWithRaw("missing"); err == nil {
 		t.Error("want error for a missing activity")

@@ -12,10 +12,14 @@ import (
 type Config struct {
 	OBPURL string
 	// OBPBankID is the bank the OGCR dynamic entities live under.
-	OBPBankID                    string
-	OBPUsername                  string
-	OBPPassword                  string
-	OBPConsumerKey               string
+	OBPBankID string
+	// OIDCIssuer is the OBP-OIDC issuer URL; its token endpoint is discovered
+	// from <issuer>/.well-known/openid-configuration. OIDCClientID and
+	// OIDCClientSecret are the tokenizer's OIDC client: it calls OBP as a
+	// Platform App, with the Scopes granted to that client's Consumer.
+	OIDCIssuer                   string
+	OIDCClientID                 string
+	OIDCClientSecret             string
 	RPCURL                       string
 	PrivateKey                   string
 	ParcelContractAddress        string
@@ -53,9 +57,9 @@ func Load() (*Config, error) {
 
 	required := map[string]*string{
 		"OBP_URL":                        new(string),
-		"OBP_USERNAME":                   new(string),
-		"OBP_PASSWORD":                   new(string),
-		"OBP_CONSUMER_KEY":               new(string),
+		"OIDC_ISSUER":                    new(string),
+		"OIDC_CLIENT_ID":                 new(string),
+		"OIDC_CLIENT_SECRET":             new(string),
 		"RPC_URL":                        new(string),
 		"PRIVATE_KEY":                    new(string),
 		"PARCEL_CONTRACT_ADDRESS":        new(string),
@@ -81,9 +85,9 @@ func Load() (*Config, error) {
 	return &Config{
 		OBPURL:                       *required["OBP_URL"],
 		OBPBankID:                    bankID,
-		OBPUsername:                  *required["OBP_USERNAME"],
-		OBPPassword:                  *required["OBP_PASSWORD"],
-		OBPConsumerKey:               *required["OBP_CONSUMER_KEY"],
+		OIDCIssuer:                   *required["OIDC_ISSUER"],
+		OIDCClientID:                 *required["OIDC_CLIENT_ID"],
+		OIDCClientSecret:             *required["OIDC_CLIENT_SECRET"],
 		RPCURL:                       *required["RPC_URL"],
 		PrivateKey:                   *required["PRIVATE_KEY"],
 		ParcelContractAddress:        *required["PARCEL_CONTRACT_ADDRESS"],

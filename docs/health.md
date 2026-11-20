@@ -67,6 +67,7 @@ OGCR-chain-cache one. It refreshes every 10 seconds and shows:
 - the headline status, with the poll timings and the mint totals;
 - the chain: node, head block and its age, the signing account and its balance,
   and whether each configured contract has code on this chain;
+- the Platform App: its Consumer, and whether each Scope it declared is held or missing;
 - how many records each trigger entity had eligible on the last poll;
 - **errors in the last hour**: every Error log line, shown once with a count,
   since a record that cannot be minted is retried (and logged) every poll;
