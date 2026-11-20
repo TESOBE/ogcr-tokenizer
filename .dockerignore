@@ -25,6 +25,5 @@ progress.md
 Dockerfile
 .dockerignore
 
-# Docs and scripts (not needed at runtime)
+# Docs (not needed at runtime)
 docs/
-scripts/

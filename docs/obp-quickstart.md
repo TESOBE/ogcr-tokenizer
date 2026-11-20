@@ -176,9 +176,9 @@ The tokenizer calls OBP as its own application, not as a User, the same way OGCR
 
 OBP refuses a whole declaration that names a Role that does not exist, and a record Role only exists once its entity does. So every entity above must exist at the bank before the declaration is accepted.
 
-`scripts/create_test_data.py` predates the move to bank-level entities and
-`parcel_activity`; it still writes the old system-level entities and needs
-updating before it is useful again.
+### Test data
+
+[OGCR-DynamicEntities](https://github.com/OpenBankProject/OGCR-DynamicEntities) creates test data that follows the current schemas. `create_example_data.py` writes one record per entity, and `create_registry_demo_data.py` then adds operators, activities, parcels with their `parcel_activity` links, and verified `activity_verification` records. They log in as a user or as a Platform App (`OBP_AUTH_MODE`); see that repo's README. Set a verification's `status_code` to `verified` and the tokenizer mints on its next poll.
 
 ---
 
