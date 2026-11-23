@@ -160,18 +160,25 @@ Entities may have more fields; only these matter for minting.
 
 - Tokenizer running and pointed at the deployed contracts (its `*_CONTRACT_ADDRESS`
   env vars) with a signing key that is the `minter` on each contract.
-- The **tokenizer user** has read roles on every entity above, at the bank
-  (`OBP_BANK_ID`): `CanGetDynamicEntityRecord_<entity>` for `operator`,
-  `activity`, `parcel`, `certification_scheme`, `certification_body`,
-  `audit_report`, `parcel_owner_verification`, `parcel_activity`,
-  `activity_verification`, `certificate_of_compliance`,
-  `activity_monitoring_period_verification`.
+- The tokenizer is set up as a **Platform App** and holds a read Scope on every entity above, at the bank (`OBP_BANK_ID`): `CanGetDynamicEntityRecord_<entity>` for `operator`, `activity`, `parcel`, `certification_scheme`, `certification_body`, `audit_report`, `parcel_owner_verification`, `parcel_activity`, `activity_verification`, `certificate_of_compliance`, `activity_monitoring_period_verification`. See [Platform App](#platform-app) below.
 - **You** (the data creator) have the matching
   `CanCreateDynamicEntityRecord_<entity>` roles at the same bank.
 
-`scripts/create_test_data.py` predates the move to bank-level entities and
-`parcel_activity`; it still writes the old system-level entities and needs
-updating before it is useful again.
+### Platform App
+
+The tokenizer calls OBP as its own application, not as a User, the same way OGCR-chain-cache and OBP Senti do. There is no DirectLogin and no tokenizer user. It gets a token from OBP-OIDC with the OAuth2 client credentials grant and sends it as `Authorization: Bearer`. The Roles it needs are Scopes granted to its Consumer, not Entitlements of a User.
+
+1. Create an OIDC client for the tokenizer in OBP-OIDC and set `OIDC_ISSUER`, `OIDC_CLIENT_ID` and `OIDC_CLIENT_SECRET`.
+2. Start the tokenizer. OBP creates a Consumer for the client on its first call. The tokenizer's attempt to declare its Scopes is refused, and the log and the status page name the Consumer's `CONSUMER_ID`.
+3. An administrator marks that Consumer as a Platform App: `POST /obp/v7.0.0/management/platform-apps`.
+4. The tokenizer declares the Scopes it needs (`PUT /obp/v7.0.0/consumers/current/platform-app`) every poll interval until all are held, then hourly.
+5. The administrator sees them in `GET /obp/v7.0.0/management/platform-apps` and grants them with `POST /obp/v7.0.0/consumers/CONSUMER_ID/scopes`. The status page shows each Scope as held or missing.
+
+OBP refuses a whole declaration that names a Role that does not exist, and a record Role only exists once its entity does. So every entity above must exist at the bank before the declaration is accepted.
+
+### Test data
+
+[OGCR-DynamicEntities](https://github.com/OpenBankProject/OGCR-DynamicEntities) creates test data that follows the current schemas. `create_example_data.py` writes one record per entity, and `create_registry_demo_data.py` then adds operators, activities, parcels with their `parcel_activity` links, and verified `activity_verification` records. They log in as a user or as a Platform App (`OBP_AUTH_MODE`); see that repo's README. Set a verification's `status_code` to `verified` and the tokenizer mints on its next poll.
 
 ---
 
@@ -199,6 +206,7 @@ cast call <ADDR> "tokenURI(uint256)(string)" <tokenId> --rpc-url <RPC>
 | `ActivityNFT not yet minted ... deferring` | Certificate/monitoring exists but the activity has no verified `activity_verification` yet | Create `activity_verification` (verified); tokenizer retries automatically |
 | `operator ... has no valid ogcr_wallet_address` | Operator wallet field missing or not an address | Set `ogcr_wallet_address` on the operator |
 | `invalid benefit amount` | A benefit field is negative or not a plain decimal | Correct the verification record, then restart the tokenizer |
-| `403 ... missing one or more roles` | Tokenizer user lacks a read role | Grant `CanGetDynamicEntityRecord_<entity>` at the bank |
+| `403 ... missing one or more roles` | The tokenizer's Consumer lacks a read Scope | Grant the Scope `CanGetDynamicEntityRecord_<entity>` at the bank to its Consumer; the status page lists the missing ones |
+| `could not declare the Platform App's Scopes` | The Consumer is not a Platform App yet, or an entity it reads does not exist | Mark the Consumer as a Platform App (see [Platform App](#platform-app)), or create the missing entity |
 | Activity never mints | It is verified but has no `certificate_of_compliance` | Create the certificate |
 | Nothing mints | Trigger not `verified`, or already minted | Check `status_code=verified`; on-chain dedup skips existing tokens |

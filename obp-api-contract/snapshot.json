@@ -1,13 +1,36 @@
 {
  "about": "Written by obp-api-contract/snapshot.py; do not edit by hand.",
- "obp_api": {},
- "taken_at": "2026-11-12T23:21:08Z",
+ "obp_api": {
+  "https://k8s.openbankproject.com": {
+   "version": "v7.0.0",
+   "git_commit": "474d4bcc554f1d8e9516e12d85be121d92410aa5"
+  }
+ },
+ "taken_at": "2026-11-23T09:20:16Z",
  "endpoints": [
   {
-   "verb": "POST",
-   "path": "/my/logins/direct",
-   "unversioned": true,
-   "missing": true
+   "verb": "PUT",
+   "path": "/obp/v7.0.0/consumers/current/platform-app",
+   "docs_from": "https://k8s.openbankproject.com",
+   "operation_id": "OBPv7.0.0-updateCurrentConsumerPlatformApp",
+   "documented_path": "/obp/v7.0.0/consumers/current/platform-app",
+   "fields": [
+    "consumer_id",
+    "consumer_name",
+    "declared_at",
+    "label",
+    "marked_at",
+    "marked_by_user_id",
+    "required_scopes",
+    "required_scopes[]",
+    "required_scopes[].bank_id",
+    "required_scopes[].held",
+    "required_scopes[].needed_for",
+    "required_scopes[].optional",
+    "required_scopes[].role_name",
+    "state",
+    "version"
+   ]
   },
   {
    "verb": "GET",

@@ -166,6 +166,38 @@
   </section>
   {{end}}
 
+  <section>
+    <h2>Platform App{{if .AppCheckedAgo}} <span class="muted" style="text-transform:none;letter-spacing:0">· declared {{.AppCheckedAgo}} ago</span>{{end}}</h2>
+    {{if .AppErr}}
+      <p class="bad" style="margin:0">Could not declare the tokenizer's Scopes.</p>
+      <p class="mono" style="overflow-wrap:anywhere">{{.AppErr}}</p>
+      <p class="hint">If OBP says the Consumer is not a Platform App, an administrator must mark it:
+        <code>POST /obp/v7.0.0/management/platform-apps</code> with the CONSUMER_ID named in the message above.
+        If OBP says a Role does not exist, an entity the tokenizer reads has not been created at this bank yet.</p>
+    {{else if .App}}
+      <div class="facts" style="margin:0 0 12px">
+        <div>Consumer<b class="mono">{{.App.ConsumerID}}</b></div>
+        {{if .App.Label}}<div>Label<b>{{.App.Label}}</b></div>{{end}}
+        <div>Scopes<b>{{if .AppMissing}}<span class="missing">{{.AppMissing}} missing</span>{{else}}<span class="held">all held</span>{{end}}</b></div>
+      </div>
+      <table>
+        <tr><th>Scope</th><th>Bank</th><th>Held</th></tr>
+        {{range .App.RequiredScopes}}
+        <tr>
+          <td><code>{{.RoleName}}</code>{{if .Optional}} <span class="muted">(optional)</span>{{end}}{{if .NeededFor}}<div class="muted" style="font-size:12px">{{.NeededFor}}</div>{{end}}</td>
+          <td><code>{{.BankID}}</code></td>
+          <td>{{if .Held}}<span class="held">✓ held</span>{{else if .Optional}}<span class="muted">not held</span>{{else}}<span class="missing">✗ missing</span>{{end}}</td>
+        </tr>
+        {{end}}
+      </table>
+      {{if .AppMissing}}
+      <p class="hint">An administrator grants these with <code>POST /obp/v7.0.0/consumers/{{.App.ConsumerID}}/scopes</code>.</p>
+      {{end}}
+    {{else}}
+      <p class="muted" style="margin:0">Not declared yet.</p>
+    {{end}}
+  </section>
+
   {{if .Eligible}}
   <section>
     <h2>Last poll</h2>

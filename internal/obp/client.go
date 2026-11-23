@@ -1,6 +1,7 @@
 package obp
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,66 +14,32 @@ import (
 )
 
 type Client struct {
-	baseURL     string
-	bankID      string
-	username    string
-	password    string
-	consumerKey string
-	http        *http.Client
+	baseURL      string
+	bankID       string
+	issuer       string
+	clientID     string
+	clientSecret string
+	http         *http.Client
 
-	mu    sync.Mutex
-	token string
+	mu            sync.Mutex
+	tokenEndpoint string
+	token         string
+	expiresAt     time.Time
 }
 
 // NewClient returns a client for the OGCR dynamic entities of one bank. The
-// registry keeps them at bank level, so every path is scoped to bankID.
-func NewClient(baseURL, bankID, username, password, consumerKey string) *Client {
+// registry keeps them at bank level, so every path is scoped to bankID. It
+// calls OBP as a Platform App with a client credentials token from the OBP-OIDC
+// issuer; see auth.go.
+func NewClient(baseURL, bankID, issuer, clientID, clientSecret string) *Client {
 	return &Client{
-		baseURL:     strings.TrimRight(baseURL, "/"),
-		bankID:      bankID,
-		username:    username,
-		password:    password,
-		consumerKey: consumerKey,
-		http:        &http.Client{Timeout: 30 * time.Second},
+		baseURL:      strings.TrimRight(baseURL, "/"),
+		bankID:       bankID,
+		issuer:       strings.TrimRight(issuer, "/"),
+		clientID:     clientID,
+		clientSecret: clientSecret,
+		http:         &http.Client{Timeout: 30 * time.Second},
 	}
-}
-
-func (c *Client) authenticate() error {
-	req, err := http.NewRequest("POST", c.baseURL+"/my/logins/direct", nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", fmt.Sprintf(
-		`DirectLogin username="%s",password="%s",consumer_key="%s"`,
-		c.username, c.password, c.consumerKey,
-	))
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return fmt.Errorf("directlogin request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("directlogin failed (%d): %s", resp.StatusCode, body)
-	}
-
-	var result struct {
-		Token string `json:"token"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return fmt.Errorf("failed to decode token: %w", err)
-	}
-	if result.Token == "" {
-		return fmt.Errorf("empty token in directlogin response")
-	}
-
-	c.mu.Lock()
-	c.token = result.Token
-	c.mu.Unlock()
-	return nil
 }
 
 func (c *Client) get(path string, params url.Values, out interface{}) error {
@@ -84,55 +51,59 @@ func (c *Client) get(path string, params url.Values, out interface{}) error {
 }
 
 // getRaw performs an authenticated GET and returns the raw response body.
-// It re-authenticates once on a 401 and retries.
+// On a 401 it fetches a new token and retries once, since the token may have
+// been revoked.
 func (c *Client) getRaw(path string, params url.Values) ([]byte, error) {
 	fullURL := c.baseURL + path
 	if len(params) > 0 {
 		fullURL += "?" + params.Encode()
 	}
-
-	token := c.getToken()
-	if token == "" {
-		if err := c.authenticate(); err != nil {
-			return nil, err
-		}
-		token = c.getToken()
-	}
-
-	req, err := http.NewRequest("GET", fullURL, nil)
+	body, status, err := c.send("GET", fullURL, nil)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "DirectLogin token="+token)
-
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("GET %s failed: %w", path, err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusUnauthorized {
-		// Token expired — re-authenticate once and retry
-		if err := c.authenticate(); err != nil {
-			return nil, err
-		}
-		return c.getRaw(path, params)
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("GET %s: read body: %w", path, err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("GET %s returned %d: %s", path, resp.StatusCode, body)
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("GET %s returned %d: %s", path, status, body)
 	}
 	return body, nil
 }
 
-func (c *Client) getToken() string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.token
+// send performs an authenticated request and returns the body and status. A
+// nil payload sends no body. A 401 gets one retry with a new token.
+func (c *Client) send(method, fullURL string, payload []byte) ([]byte, int, error) {
+	for attempt := 0; ; attempt++ {
+		token, err := c.getToken()
+		if err != nil {
+			return nil, 0, err
+		}
+		var reader io.Reader
+		if payload != nil {
+			reader = bytes.NewReader(payload)
+		}
+		req, err := http.NewRequest(method, fullURL, reader)
+		if err != nil {
+			return nil, 0, err
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+		if payload != nil {
+			req.Header.Set("Content-Type", "application/json")
+		}
+
+		resp, err := c.http.Do(req)
+		if err != nil {
+			return nil, 0, fmt.Errorf("%s %s failed: %w", method, fullURL, err)
+		}
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return nil, 0, fmt.Errorf("%s %s: read body: %w", method, fullURL, err)
+		}
+		if resp.StatusCode == http.StatusUnauthorized && attempt == 0 {
+			c.dropToken()
+			continue
+		}
+		return body, resp.StatusCode, nil
+	}
 }
 
 // Dynamic entity names read by the tokenizer.

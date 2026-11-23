@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"ogcr-tokenizer/internal/eth"
+	"ogcr-tokenizer/internal/obp"
 )
 
 // State is the tokenizer's view of itself. Safe for concurrent use: the poll
@@ -45,6 +46,11 @@ type State struct {
 	problems    []*problem
 	chain       *eth.ChainInfo
 	runNow      func()
+
+	// The Platform App as OBP last reported it, or why it could not declare.
+	app          *obp.PlatformApp
+	appErr       string
+	appCheckedAt time.Time
 
 	minted  atomic.Int64
 	failed  atomic.Int64

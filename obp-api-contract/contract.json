@@ -3,16 +3,23 @@
  "version_policy": "Each call writes the OBP-API version it needs in its own path. One configured version cannot serve them all, because an endpoint exists only in the versions OBP-API documents it for. The contract test checks every call against the endpoint documented for the version it names and fails on any version below v5.1.0. To move a call to a newer version, change its path and run snapshot.py again.",
  "calls": [
   {
-   "verb": "POST",
-   "path": "/my/logins/direct",
-   "source": "internal/obp/client.go",
+   "verb": "PUT",
+   "path": "/obp/v7.0.0/consumers/current/platform-app",
+   "source": "internal/obp/platformapp.go",
    "needles": [
-    "c.baseURL+\"/my/logins/direct\""
+    "const path = \"/obp/v7.0.0/consumers/current/platform-app\"",
+    "c.send(\"PUT\", c.baseURL+path, payload)"
    ],
    "reads": [
-    "token"
+    "consumer_id",
+    "label",
+    "required_scopes[].role_name",
+    "required_scopes[].bank_id",
+    "required_scopes[].needed_for",
+    "required_scopes[].optional",
+    "required_scopes[].held"
    ],
-   "undocumented_endpoint": "the unversioned DirectLogin route has no resource doc; OBP-API documents DirectLogin as POST /obp/v6.0.0/my/logins/direct (OBPv6.0.0-directLoginEndpoint, also listed under v7.0.0, answering token), but the snapshot cannot show that both reach the same implementation, so the call is left as it is"
+   "note": "Declares the Scopes the tokenizer needs. OBP-API refuses it until an administrator has marked the app's Consumer as a Platform App, and the answer says which Scopes the app holds."
   },
   {
    "verb": "GET",
