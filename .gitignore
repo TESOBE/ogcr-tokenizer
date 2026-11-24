@@ -1,3 +1,6 @@
 .idea
 .env
 .env_*
+
+# Backups of .env, which hold secrets
+.env.bak*
