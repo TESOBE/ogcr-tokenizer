@@ -86,7 +86,7 @@ func keepDeclaring(ctx context.Context, client *obp.Client, state *health.State,
 func declarePlatformApp(client *obp.Client) (*obp.PlatformApp, error) {
 	app, err := client.DeclarePlatformApp()
 	if err != nil {
-		slog.Warn("could not declare the Platform App's Scopes; an administrator must mark this Consumer as a Platform App", "err", err)
+		slog.Warn("could not declare the Platform App's Scopes; the error says why (OBP-35046 means an administrator must mark this Consumer as a Platform App)", "err", err)
 		return nil, err
 	}
 	if missing := app.Missing(); len(missing) > 0 {
