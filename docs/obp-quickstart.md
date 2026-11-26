@@ -169,6 +169,7 @@ Entities may have more fields; only these matter for minting.
 The tokenizer calls OBP as its own application, not as a User, the same way OGCR-chain-cache and OBP Senti do. There is no DirectLogin and no tokenizer user. It gets a token from OBP-OIDC with the OAuth2 client credentials grant and sends it as `Authorization: Bearer`. The Roles it needs are Scopes granted to its Consumer, not Entitlements of a User.
 
 1. Create an OIDC client for the tokenizer in OBP-OIDC and set `OIDC_ISSUER`, `OIDC_CLIENT_ID` and `OIDC_CLIENT_SECRET`.
+   `OIDC_ISSUER` is the `issuer` value OBP-OIDC publishes at `<issuer>/.well-known/openid-configuration`, without a trailing slash. OBP-OIDC serves everything under `/obp-oidc`, so the issuer ends in `/obp-oidc`, not the bare host: `http://localhost:9000/obp-oidc` locally, and `https://oidc.dcr.ogcr.tesobe.com/obp-oidc` for the OBP-API at `https://dcr.ogcr.tesobe.com`. The tokenizer finds the token endpoint from that document. `OBP_URL` is the OBP-API address, such as `https://dcr.ogcr.tesobe.com`.
 2. Start the tokenizer. OBP creates a Consumer for the client on its first call. The tokenizer's attempt to declare its Scopes is refused, and the log and the status page name the Consumer's `CONSUMER_ID`.
 3. An administrator marks that Consumer as a Platform App: `POST /obp/v7.0.0/management/platform-apps`.
 4. The tokenizer declares the Scopes it needs (`PUT /obp/v7.0.0/consumers/current/platform-app`) every poll interval until all are held, then hourly.
